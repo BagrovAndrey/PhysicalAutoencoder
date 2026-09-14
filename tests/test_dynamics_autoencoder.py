@@ -16,6 +16,8 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
+from grid.grid import Grid
+from network.builders import build_static_memristor_array
 from network.dynamics import VoltageDynamics
 from network.iv_characteristics import ohmic
 
@@ -92,9 +94,12 @@ def test_simple_autoencoder():
     # Input pattern
     V_input = np.array([1.0, 0.0, 1.0, 0.0])
     
-    # Initialize solver
-    solver = VoltageDynamics(adjacency, ohmic, capacitances=1.0)
-    
+    # Initialize solver: Grid holds topology + boundary conditions, a
+    # static (non-plastic) Memristor array holds the fixed conductances.
+    grid = Grid(adjacency, input_nodes, V_input.copy(), capacitances=1.0)
+    memristors = build_static_memristor_array(adjacency, conductances, ohmic)
+    solver = VoltageDynamics(grid, memristors)
+
     # Initial voltages
     V_init = np.zeros(n_total)
     V_init[input_nodes] = V_input
@@ -108,9 +113,7 @@ def test_simple_autoencoder():
         # === FREE PHASE ===
         print(f"Free phase (β={beta_free}, T={exposure_time_free}s)...")
         result_free = solver.relax_transient(
-            conductances, V_init,
-            clamped_nodes=input_nodes,
-            clamped_values=V_input,
+            V_init,
             penalty_pairs=penalty_pairs,
             beta=beta_free,
             dt=dt,
@@ -140,9 +143,7 @@ def test_simple_autoencoder():
         V_init_clamped = result_free['V_final'].copy()
         
         result_clamped = solver.relax_transient(
-            conductances, V_init_clamped,
-            clamped_nodes=input_nodes,
-            clamped_values=V_input,
+            V_init_clamped,
             penalty_pairs=penalty_pairs,
             beta=beta_clamped,
             g_penalty=g_penalty,

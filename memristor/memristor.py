@@ -3,12 +3,35 @@ from typing import Optional
 import random
 
 class Memristor:
-    def __init__(self, cur_func, plast_func, obs_func, window_pts, dt, w0: Optional[float] = None, Q_history: Optional[np.ndarray] = None):
+    """
+    A single memristive edge: local conductance state `w`, a fast local
+    window-average integrator of an observable `Q`, and a plasticity rule
+    `plast_func` that turns that average into dw/dt.
+
+    theta: `plast_func` is called as `plast_func(Q_avg, w, theta)`. `theta`
+    is a reference value the local Q_avg is compared against - without it,
+    a sign-definite Q (e.g. (dV)^2) can only ever push w in one direction
+    (see DEVELOPMENT.md, "Global vs local theta"). Today `theta` is always
+    set from the outside (see Memristor.theta / set_theta below) by a single
+    network-wide owner (training/trainer.py) - a stand-in for a shared
+    physical slow field (e.g. substrate temperature or a common bias rail),
+    not something this class computes for itself.
+
+    This is a deliberate extension point, not an oversight: a future
+    version could have each Memristor track its own local low-pass average
+    of its own Q_avg instead of taking theta from outside. That only
+    requires changing where `self.theta` gets its value (e.g. updating it
+    inside `step`) - the `plast_func(Q_avg, w, theta)` call signature, and
+    every rule written against it (training/rules.py), stays the same.
+    """
+
+    def __init__(self, cur_func, plast_func, obs_func, window_pts, dt, w0: Optional[float] = None, Q_history: Optional[np.ndarray] = None, theta: float = 0.0):
 
         self.dt = dt
         self.window_pts = window_pts
+        self.theta = theta  # see class docstring: externally-supplied by default
 
-        
+
         # Setup weights
         
         if w0 is None:
@@ -62,9 +85,14 @@ class Memristor:
     def Q_avg(self):
         return self.running_sum / self.window_pts
 
+    def set_theta(self, theta: float):
+        """Set the reference value plast_func compares Q_avg against.
+        Called by the network-wide owner (training/trainer.py) each step."""
+        self.theta = theta
+
     def dw_dt(self):
         Q_av = self.Q_avg()
-        return self.plast(Q_av, self.w)
+        return self.plast(Q_av, self.w, self.theta)
 
     def step(self, V):
         Q = self.obs(V, self.current(V))

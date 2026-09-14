@@ -18,6 +18,8 @@ from matplotlib.patches import FancyArrowPatch
 import networkx as nx
 from dataclasses import dataclass
 
+from grid.grid import Grid
+from network.builders import build_static_memristor_array
 from network.dynamics import VoltageDynamics
 from network.iv_characteristics import ohmic
 from visualization.dynamics_viz import (
@@ -69,16 +71,16 @@ def test_voltage_evolution_plot():
     print("\n=== Test: Voltage Evolution Plot ===")
     
     # Simple 3-node chain relaxation
-    adjacency = np.array([[0, 1, 0], [1, 0, 1], [0, 1, 0]])
+    adjacency = np.array([[0, 1, 0], [1, 0, 1], [0, 1, 0]], dtype=bool)
     conductances = np.array([[0, 1, 0], [1, 0, 1], [0, 1, 0]], dtype=float)
-    
-    solver = VoltageDynamics(adjacency, ohmic, capacitances=1.0)
-    
+
+    grid = Grid(adjacency, np.array([0, 2]), np.array([1.0, 0.0]), capacitances=1.0)
+    memristors = build_static_memristor_array(adjacency, conductances, ohmic)
+    solver = VoltageDynamics(grid, memristors)
+
     V_init = np.array([1.0, 0.5, 0.0])
     result = solver.relax_transient(
-        conductances, V_init,
-        clamped_nodes=np.array([0, 2]),
-        clamped_values=np.array([1.0, 0.0]),
+        V_init,
         dt=CONFIG.dt * 10,  # Coarser for simple test
         record_history=True
     )
@@ -123,39 +125,37 @@ def test_network_states():
     rng = np.random.default_rng(CONFIG.random_seed)
     conductances = adjacency.astype(float) * rng.uniform(0.5, 1.5, (n_total, n_total))
     conductances = (conductances + conductances.T) / 2
-    
-    solver = VoltageDynamics(adjacency, ohmic)
+
     V_input = np.array([1.0, 0.0, 1.0, 0.0])
+    grid = Grid(adjacency, input_nodes, V_input.copy())
+    memristors = build_static_memristor_array(adjacency, conductances, ohmic)
+    solver = VoltageDynamics(grid, memristors)
     V_init = np.zeros(n_total)
     V_init[input_nodes] = V_input
     V_init[hidden_nodes] = rng.uniform(0, 1, size=CONFIG.n_hidden)
     V_init[output_nodes] = rng.uniform(0, 1, size=CONFIG.n_output)
-    
+
     node_groups = {
         'Input': list(input_nodes),
         'Hidden': list(hidden_nodes),
         'Output': list(output_nodes)
     }
-    
+
     penalty_pairs = [(i, CONFIG.n_input + CONFIG.n_hidden + i) for i in range(CONFIG.n_input)]
-    
+
     # === FREE PHASE ===
     print("  Solving free phase...")
     result_free = solver.relax_transient(
-        conductances, V_init,
-        clamped_nodes=input_nodes,
-        clamped_values=V_input,
+        V_init,
         dt=CONFIG.dt,
         max_steps=CONFIG.max_steps_free,
         tol=CONFIG.tol
     )
-    
+
     # === CLAMPED PHASE ===
     print("  Solving clamped phase...")
     result_clamped = solver.relax_transient(
-        conductances, result_free['V_final'],
-        clamped_nodes=input_nodes,
-        clamped_values=V_input,
+        result_free['V_final'],
         penalty_pairs=penalty_pairs,
         beta=CONFIG.beta_clamped,
         g_penalty=CONFIG.g_penalty,
@@ -265,35 +265,33 @@ def test_animation():
     rng = np.random.default_rng(CONFIG.random_seed)
     conductances = adjacency.astype(float) * rng.uniform(0.5, 1.5, (n_total, n_total))
     conductances = (conductances + conductances.T) / 2
-    
-    solver = VoltageDynamics(adjacency, ohmic, capacitances=1.0)
-    
+
     V_input = np.array([1.0, 0.0, 1.0, 0.0])
+    grid = Grid(adjacency, input_nodes, V_input.copy(), capacitances=1.0)
+    memristors = build_static_memristor_array(adjacency, conductances, ohmic)
+    solver = VoltageDynamics(grid, memristors)
+
     V_init = np.zeros(n_total)
     V_init[input_nodes] = V_input
     V_init[hidden_nodes] = rng.uniform(0, 1, size=CONFIG.n_hidden)
     V_init[output_nodes] = rng.uniform(0, 1, size=CONFIG.n_output)
-    
+
     penalty_pairs = [(i, CONFIG.n_input + CONFIG.n_hidden + i) for i in range(CONFIG.n_input)]
-    
+
     # === FREE PHASE ===
     print("  Simulating free phase...")
     result_free = solver.relax_transient(
-        conductances, V_init,
-        clamped_nodes=input_nodes,
-        clamped_values=V_input,
+        V_init,
         dt=CONFIG.dt,
         max_steps=CONFIG.max_steps_free,
         tol=CONFIG.tol,
         record_history=True
     )
-    
+
     # === CLAMPED PHASE ===
     print("  Simulating clamped phase...")
     result_clamped = solver.relax_transient(
-        conductances, result_free['V_final'],
-        clamped_nodes=input_nodes,
-        clamped_values=V_input,
+        result_free['V_final'],
         penalty_pairs=penalty_pairs,
         beta=CONFIG.beta_clamped,
         g_penalty=CONFIG.g_penalty,

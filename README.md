@@ -51,32 +51,54 @@ This project implements a theoretical framework for autonomous learning in physi
 ```
 MeroCircuit/
 ├── network/                 # Voltage dynamics and I-V characteristics
-│   ├── dynamics.py         # VoltageDynamics solver (Euler method)
+│   ├── dynamics.py         # VoltageDynamics solver (Euler method), Grid/Memristor-based
+│   ├── builders.py         # Glue: (adjacency, weights, iv_func) <-> Grid + Memristor array
 │   ├── iv_characteristics.py  # Ohmic, ReLU, sigmoid, diode I-V curves
-│   └── legacy.py           # Volodya's original R_Network (preserved)
+│   └── legacy.py           # Volodya's original R_Network (preserved, unrelated solver)
+├── grid/
+│   └── grid.py             # Grid: topology + boundary conditions
+├── memristor/
+│   └── memristor.py        # Memristor: per-edge state, local Q integrator, plasticity hook
 ├── datasets/               # Bars & Stripes pattern generation
 │   ├── bars_stripes.py    # BarsAndStripes class
 │   └── generate.py        # Dataset generation script
 ├── visualization/          # Plotting and animation tools
 │   ├── plotting.py        # Static plots for patterns
 │   └── dynamics_viz.py    # Network graphs, current flows, animations
-├── tests/                  # Test suite
-│   ├── test_dynamics_basic.py      # Simple circuits (chains, dividers)
-│   ├── test_dynamics_autoencoder.py  # Autoencoder topology tests
-│   └── test_network_visualization.py  # Visualization tests
-├── training/               # [In development] Plasticity and learning
-└── memristor/              # [Future] Memristor models (Anya's work)
+├── training/
+│   ├── plasticity.py      # SimplePlasticity: explicit two-snapshot contrastive rule
+│   ├── rules.py            # Memristor.plast_func rules (default: global_threshold_rule)
+│   └── trainer.py          # Trainer: free/clamped cycle + the shared theta
+├── tests/                  # Test suite (see DEVELOPMENT.md for current pass/fail status)
+│   ├── test_dynamics_basic.py         # Simple circuits (chains, dividers)
+│   ├── test_dynamics_autoencoder.py   # Autoencoder topology tests
+│   ├── test_network_visualization.py  # Visualization tests
+│   ├── test_plasticity_simple.py      # 3-node chain, explicit contrastive rule
+│   ├── test_plasticity.py             # 4->3->4 autoencoder, explicit contrastive rule
+│   └── test_with_memristors.py        # Grid+Memristor+Trainer smoke test
+└── DEVELOPMENT.md          # Why things look the way they do, and what's still open
 ```
 
 ## Current Implementation Status
 
+See `DEVELOPMENT.md` for the full, current picture (test results, open
+problems, and a note on a merge that briefly broke `main` - worth reading
+before assuming anything below is up to date).
+
 ### ✅ Completed
 
 **Voltage Dynamics Solver** (`network/dynamics.py`)
-- Transient relaxation via explicit Euler method
+- Transient relaxation via explicit Euler method, on top of `Grid` (topology
+  + boundary conditions) and an array of `Memristor` objects (per-edge state)
 - Penalty coupling for autoencoder reconstruction
-- Configurable I-V characteristics and capacitances
+- Configurable I-V characteristics per edge, and capacitances
 - Free phase (β=0) and clamped phase (β>0) support
+
+**Grid & Memristor** (`grid/grid.py`, `memristor/memristor.py`)
+- `Grid`: adjacency, clamped nodes/values, capacitances
+- `Memristor`: local conductance state, a fast windowed average of a local
+  observable `Q`, and a pluggable plasticity rule (`plast_func`) - see
+  `training/rules.py` and DEVELOPMENT.md's "Global vs local theta"
 
 **I-V Characteristics** (`network/iv_characteristics.py`)
 - Ohmic (linear)
@@ -102,29 +124,26 @@ MeroCircuit/
 - Autoencoder topology with realistic experimental protocol
 - Penalty coupling validation
 - Convergence tests with different capacitances
+- Plasticity: 3-node chain (converges) and 4→3→4 autoencoder (learns, then
+  plateaus - see DEVELOPMENT.md, Open Problems)
+- Grid+Memristor+Trainer smoke test (`test_with_memristors.py`)
 
 ### 🚧 In Development
 
 **Plasticity Rules** (`training/`)
-- Contrastive Hebbian learning
-- Time-averaged observables with EMA
-- Weight update dynamics
+- Explicit two-snapshot contrastive rule (`SimplePlasticity`) - works, plateaus
+- Local/online rule driven by a shared global threshold (`training/rules.py`) - new, only smoke-tested at length
 
-**Training Loop**
-- Multi-cycle free/clamped iteration
-- MSE tracking over epochs
-- Weight evolution visualization
+**Training Loop** (`training/trainer.py`)
+- Single-cycle, single-pattern free/clamped protocol - done
+- Multi-cycle, full-dataset loop over Bars & Stripes - not yet wired up
+- MSE tracking / weight evolution visualization - not started
 
 ### 📋 Planned
 
-**Memristor Models** (Anya's module)
-- Physical memristor characteristics
-- State-dependent conductance
-- Integration with dynamics solver
-
-**Network Topology** (Volodya's module)
-- Advanced network builders
-- Custom connectivity patterns
+- Wire `Trainer` to the full 4×4 Bars & Stripes dataset
+- Resolve the 4→3→4 plateau (see DEVELOPMENT.md, Open Problems)
+- Load-test at the target ~64→8→64 scale
 
 ## Usage Examples
 
@@ -147,24 +166,24 @@ train_patterns, test_patterns = ds.split_train_test(test_fraction=0.2)
 
 ### Run Voltage Relaxation
 ```python
+from grid.grid import Grid
+from network.builders import build_static_memristor_array
 from network.dynamics import VoltageDynamics
 from network.iv_characteristics import ohmic
 import numpy as np
 
 # Simple 3-node chain: 0 -- 1 -- 2
-adjacency = np.array([[0, 1, 0], [1, 0, 1], [0, 1, 0]])
+adjacency = np.array([[0, 1, 0], [1, 0, 1], [0, 1, 0]], dtype=bool)
 conductances = adjacency.astype(float)
 
-solver = VoltageDynamics(adjacency, ohmic, capacitances=1.0)
+grid = Grid(adjacency, clamped_nodes=np.array([0, 2]),
+            clamped_values=np.array([1.0, 0.0]), capacitances=1.0)
+memristors = build_static_memristor_array(adjacency, conductances, ohmic)
+solver = VoltageDynamics(grid, memristors)
 
-# Relax with boundary conditions
+# Relax with boundary conditions (already set on the Grid above)
 V_init = np.array([1.0, 0.5, 0.0])
-result = solver.relax_transient(
-    conductances, V_init,
-    clamped_nodes=np.array([0, 2]),
-    clamped_values=np.array([1.0, 0.0]),
-    dt=0.01, max_steps=1000, record_history=True
-)
+result = solver.relax_transient(V_init, dt=0.01, max_steps=1000, record_history=True)
 
 print(f"Final voltages: {result['V_final']}")
 print(f"Converged: {result['converged']} in {result['n_steps']} steps")
@@ -176,28 +195,31 @@ print(f"Converged: {result['converged']} in {result['n_steps']} steps")
 n_input, n_hidden, n_output = 4, 3, 4
 n_total = n_input + n_hidden + n_output
 
-# ... build adjacency and conductances ...
+# ... build adjacency, conductances, input_nodes, V_input ...
+
+grid = Grid(adjacency, clamped_nodes=input_nodes, clamped_values=V_input, capacitances=1.0)
+memristors = build_static_memristor_array(adjacency, conductances, ohmic)
+solver = VoltageDynamics(grid, memristors)
 
 penalty_pairs = [(i, n_input + n_hidden + i) for i in range(n_input)]
 
 # Free phase (β=0)
-result_free = solver.relax_transient(
-    conductances, V_init,
-    clamped_nodes=input_nodes,
-    clamped_values=V_input,
-    beta=0.0, dt=0.001, max_steps=10000
-)
+result_free = solver.relax_transient(V_init, beta=0.0, dt=0.001, max_steps=10000)
 
 # Clamped phase (β>0)
 result_clamped = solver.relax_transient(
-    conductances, result_free['V_final'],
-    clamped_nodes=input_nodes,
-    clamped_values=V_input,
+    result_free['V_final'],
     penalty_pairs=penalty_pairs,
     beta=1.0, g_penalty=1.0,
     dt=0.001, max_steps=10000
 )
 ```
+
+For a trainable (not just static) network, build the `Memristor` array with
+`network.builders.build_memristor_array` instead (it maps `w` through a
+`g_min`/`g_max` range and takes a real `plast_func`/`obs_func` - see
+`training/rules.py` and `training/trainer.py`, or `tests/test_with_memristors.py`
+for a complete worked example).
 
 ### Visualize Network Dynamics
 ```python
@@ -211,7 +233,8 @@ fig = plot_voltage_evolution(
 )
 fig.savefig('voltage_evolution.png')
 
-# Create animation (free → clamped)
+# Create animation (free → clamped) - animate_relaxation still takes a plain
+# conductance matrix + iv_function directly, independent of Grid/Memristor
 V_combined = np.vstack([result_free['V_history'], result_clamped['V_history']])
 anim = animate_relaxation(
     V_combined, adjacency, conductances, ohmic,

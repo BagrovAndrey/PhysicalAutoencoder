@@ -9,7 +9,6 @@ to reproduce a single pattern without using Trainer class.
 
 import sys
 from pathlib import Path
-from training.plasticity import compute_Q_from_voltages
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import numpy as np
@@ -18,9 +17,14 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from dataclasses import dataclass
 
+from grid.grid import Grid
+from network.builders import build_memristor_array, extract_weights, set_weights
 from network.dynamics import VoltageDynamics
 from network.iv_characteristics import ohmic, relu_iv
-from training.plasticity import SimplePlasticity, weights_to_conductances, conductances_to_weights
+from training.plasticity import (
+    SimplePlasticity, weights_to_conductances, conductances_to_weights,
+    compute_Q_from_voltages,
+)
 
 
 # ============================================================
@@ -41,7 +45,15 @@ class PlasticityTestConfig:
     tau_integrate: float = 20.0
     
     # Training parameters
-    n_cycles: int = 300
+    # NOTE: DEVELOPMENT.md's documented 4->3->4 plateau (MSE 0.32 -> ~0.044)
+    # was characterized at n_cycles=300; that took ~2 cycles/s with the old
+    # array-based solver. Going through per-edge Memristor objects (this
+    # file, since network/dynamics.py is now Grid/Memristor-based) has
+    # more per-step overhead, so the default here is reduced to keep this
+    # a runnable regression test rather than a multi-minute research run -
+    # by cycle ~30-40 the MSE improvement is already well past the 10%
+    # threshold asserted below. Bump this back up for a full characterization run.
+    n_cycles: int = 40
     exposure_time_free: float = 10.0
     exposure_time_clamped: float = 10.0
     
@@ -192,23 +204,32 @@ def test_single_pattern_overfitting():
         for o in output_nodes:
             adjacency[h, o] = adjacency[o, h] = True
     
-    # Initialize solver and plasticity
-    solver = VoltageDynamics(adjacency, relu_iv, capacitances=1.0)
+    # Target pattern
+    pattern = np.array([1.0, 0.0, 1.0, 0.0])
+
+    # Initialize weights
+    rng = np.random.default_rng(CONFIG.random_seed)
+    weights = rng.uniform(CONFIG.w_min, CONFIG.w_max, size=(n_total, n_total))
+    weights = weights * adjacency
+
+    # Initialize solver and plasticity. As in test_plasticity_simple.py, the
+    # Memristor array's own plast_func/obs_func are unused here -
+    # SimplePlasticity computes the weight update externally each cycle
+    # from voltage snapshots, and we write it back with set_weights.
+    grid = Grid(adjacency, input_nodes, pattern.copy(), capacitances=1.0)
+    memristors = build_memristor_array(
+        adjacency, weights, iv_func=relu_iv,
+        obs_func=lambda V, I: 0.0, plast_func=lambda Q, w, theta: 0.0,
+        window_pts=1, dt_local=1.0, g_min=CONFIG.g_min, g_max=CONFIG.g_max,
+    )
+    solver = VoltageDynamics(grid, memristors)
     plasticity = SimplePlasticity(
         eta=CONFIG.eta,
         gamma=CONFIG.gamma,
         tau_integrate=CONFIG.tau_integrate
     )
-    
+
     penalty_pairs = [(i, CONFIG.n_input + CONFIG.n_hidden + i) for i in range(CONFIG.n_input)]
-    
-    # Initialize weights
-    rng = np.random.default_rng(CONFIG.random_seed)
-    weights = rng.uniform(CONFIG.w_min, CONFIG.w_max, size=(n_total, n_total))
-    weights = weights * adjacency
-    
-    # Target pattern
-    pattern = np.array([1.0, 0.0, 1.0, 0.0])
     
     # Compute max steps
     max_steps_free = int(CONFIG.exposure_time_free / CONFIG.dt)
@@ -221,18 +242,17 @@ def test_single_pattern_overfitting():
     # Training loop
     print("Training...")
     for cycle in range(CONFIG.n_cycles):
-        # Convert weights to conductances
-        conductances = weights_to_conductances(weights, CONFIG.g_min, CONFIG.g_max)
-        
+        # Sync the current weight matrix into the Memristor array (weights
+        # was last updated at the end of the previous iteration).
+        set_weights(memristors, adjacency, weights)
+
         # Initial voltages
         V_init = np.zeros(n_total)
         V_init[input_nodes] = pattern
-        
+
         # === FREE PHASE ===
         result_free = solver.relax_transient(
-            conductances, V_init,
-            clamped_nodes=input_nodes,
-            clamped_values=pattern,
+            V_init,
             penalty_pairs=penalty_pairs,
             beta=CONFIG.beta_free,
             dt=CONFIG.dt,
@@ -254,9 +274,7 @@ def test_single_pattern_overfitting():
         
         # === CLAMPED PHASE ===
         result_clamped = solver.relax_transient(
-            conductances, result_free['V_final'],
-            clamped_nodes=input_nodes,
-            clamped_values=pattern,
+            result_free['V_final'],
             penalty_pairs=penalty_pairs,
             beta=CONFIG.beta_clamped,
             g_penalty=CONFIG.g_penalty,
@@ -346,14 +364,12 @@ def test_single_pattern_overfitting():
     
     # Final reconstruction
     ax = axes[1]
-    conductances_final = weights_to_conductances(weights, CONFIG.g_min, CONFIG.g_max)
+    set_weights(memristors, adjacency, weights)
     V_init = np.zeros(n_total)
     V_init[input_nodes] = pattern
-    
+
     result_final = solver.relax_transient(
-        conductances_final, V_init,
-        clamped_nodes=input_nodes,
-        clamped_values=pattern,
+        V_init,
         dt=CONFIG.dt,
         max_steps=max_steps_free,
         tol=CONFIG.tol

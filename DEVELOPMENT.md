@@ -4,7 +4,40 @@ Working document for restoring context between sessions. README.md describes
 *what* the code does; this file describes *why* it looks the way it does and
 what is currently broken.
 
-Last updated: 2026-09-11
+Last updated: 2026-09-14
+
+---
+
+## History: the broken merge (read this first if things don't match what you remember)
+
+Commit `2add7d5` ("Added classes Memristor and Grid, the solver is adapted
+for working with the classes", merged as PR #1 / `a80c999`) rewrote
+`network/dynamics.py`'s method bodies (`relax_transient`,
+`_compute_time_derivative`) to use the new `Grid`/`Memristor` classes, but
+did **not** update `__init__` (still took the old `adjacency, iv_function,
+capacitances` args and never set `self.grid` / `self.memristors`) or
+`_compute_time_derivative`'s own signature (still declared `conductances,
+free_nodes, ...` while being called with different arguments). The file was
+internally inconsistent from that commit onward: `AttributeError:
+'VoltageDynamics' object has no attribute 'grid'` on the very first call.
+
+This went unnoticed because nobody re-ran the test suite after the merge -
+the "Current Status" table below (and the plateau numbers in "Test
+results") describe the state *before* the merge, not the state that was
+actually on `main` afterward. If you're reading this confused because
+`test_plasticity.py` didn't behave the way this file says: that's why.
+
+Separately, `tests/test_with_memristors.py` (meant to exercise
+`Memristor`/`Grid` directly) called both classes with keyword arguments
+that matched neither's real constructor - it was a sketch written ahead of
+the classes actually being finalized, never runnable as committed.
+
+**Fixed as of 2026-09-14**: `network/dynamics.py` is now the
+self-consistent `Grid`/`Memristor`-based solver (what had been developed in
+parallel as `network/dynamics_improved.py`, now retired/merged in). This is
+the canonical solver going forward - see "Architecture decisions" below for
+what else changed alongside this fix, and "Current Status" for what is
+actually verified to run now.
 
 ---
 
@@ -12,21 +45,39 @@ Last updated: 2026-09-11
 
 | Component | Status |
 |---|---|
-| Voltage dynamics solver (`network/dynamics.py`) | Done, tested |
+| Voltage dynamics solver (`network/dynamics.py`) | Fixed 2026-09-14 (see History above). Grid/Memristor-based. All of `tests/test_dynamics_basic.py`, `test_dynamics_autoencoder.py` pass. |
+| Grid (`grid/grid.py`), Memristor (`memristor/memristor.py`) | Done. Memristor extended with a `theta` parameter for its plasticity rule (see "Global vs local theta"). |
 | I-V characteristics (`network/iv_characteristics.py`) | Done, tested |
 | Datasets (`datasets/bars_stripes.py`) | Done, tested |
-| Visualization (`visualization/dynamics_viz.py`) | Done, tested (free→clamped animation, adaptive frame skip) |
-| Plasticity rule (`training/plasticity.py`) | Works, but see "Open Problems" |
-| Trainer (`training/trainer.py`) | **Not created.** Drafted but not committed; `test_plasticity.py` runs the training loop inline instead. |
+| Visualization (`visualization/dynamics_viz.py`) | Done, tested (free→clamped animation, adaptive frame skip); ported to Grid/Memristor in `test_network_visualization.py` |
+| Plasticity rule, explicit contrast (`training/plasticity.py`, `SimplePlasticity`) | Works, ported to run on top of Grid/Memristor (see `test_plasticity.py`, `test_plasticity_simple.py`). Plateau still open, see "Open Problems". |
+| Plasticity rule, local/online (`training/rules.py`, `Memristor.plast_func`) | New. `global_threshold_rule` is the default going forward - see "Global vs local theta". Exercised by `tests/test_with_memristors.py` (smoke test only, see its docstring for scope). |
+| Trainer (`training/trainer.py`) | **Created 2026-09-14.** Owns the free/clamped cycle and the one shared `theta`. Not yet wired to the Bars & Stripes dataset - still one-pattern only. |
+| `network/builders.py` | New. Glue between (adjacency, weight matrix, iv_function) and Grid/Memristor objects - used throughout the ported tests. |
 | Training visualization | Not started |
-| Integration with Anya (memristor) / Volodya (topology) | Not started; both are delayed |
+| Integration with Anya (memristor) / Volodya (topology) | **Done in the sense of "compiles and runs together"** (Grid + Memristor + VoltageDynamics + Trainer all use each other now). Not done in the sense of "the plateau is understood" or "runs on the full 64→8→64 target architecture" - see Open Problems. |
 
-### Test results
+### Test results (2026-09-14, after the fix)
 
-- `tests/test_plasticity_simple.py` (3-node chain, target V[1]=0.68): **passes**, converges to target.
-- `tests/test_plasticity.py`, 2→2→2 on pattern [1,0]: MSE 0.26 → 0.05, outputs differentiate correctly.
-- `tests/test_plasticity.py`, 4→3→4 on pattern [1,0,1,0]: MSE 0.32 → ~0.044, then **plateaus**.
-  Free-phase output stalls around [0.73, 0.13, 0.73, 0.13]; clamped-phase output is exact [1,0,1,0].
+- `tests/test_dynamics_basic.py`, `test_dynamics_autoencoder.py`, `test_network_visualization.py`: pass.
+- `tests/test_plasticity_simple.py` (3-node chain, target V[1]=0.68): **passes**, converges to target (95% error reduction over 50 cycles) - numerically identical behaviour to before the merge broke it.
+- `tests/test_plasticity.py`, 4→3→4 on pattern [1,0,1,0], quadratic `Q`: MSE 0.247 → 0.050 over 40 cycles (reduced from the historical 300-cycle run for test runtime - see the note in the file). This reproduces the historical plateau trajectory exactly (same numbers to 4 significant figures as the pre-merge run at matching cycle counts): output settles toward `[~0.73, ~0.13, ~0.73, ~0.13]` instead of `[1,0,1,0]`. **Still open, see below.**
+- `tests/test_with_memristors.py`: new smoke test (Grid + Memristor + Trainer, `global_threshold_rule`). Verifies the machinery runs, stays numerically finite, and moves weights - not a quality benchmark (short exposure times for test speed; see its docstring). A quick informal run of the *same rule* (fast vectorized prototype, not through Trainer's per-object loop) on the 4→3→4/[1,0,1,0] case, run long enough (~70 cycles of 10s exposure), reached MSE≈0.041 - comparable to the explicit-contrast plateau, after an initial ~35-cycle collapse-then-recovery transient. Worth re-checking through the real `Trainer` once someone has time for a multi-minute run.
+
+### Correction to the "Design Decisions" section below (found 2026-09-14)
+
+The observable actually used in `test_plasticity.py`/`test_plasticity_simple.py` is
+`compute_Q_from_voltages` (**quadratic**, `Q = (V_j - V_i)^2`), not the linear
+`integrate_observable_ema`/`compute_observable` path described as adopted in
+point 2 below (that call is commented out in the training loop). The
+quadratic version is what actually produced the plateau numbers on record.
+Tried swapping in the literal linear signed `Q = V_j - V_i` on the same
+4→3→4 case: it does **not** fix the plateau, it makes reconstruction worse
+(MSE rose to ~0.41, outputs collapsed toward 0 instead of tracking the
+pattern) - plausibly because `w[i,j]` and `w[j,i]` are independent
+(non-symmetrized) in this code, and a signed antisymmetric `Q` interacts
+badly with that. Point 2 below is kept for the historical reasoning, but
+its conclusion should be treated as unresolved, not adopted.
 
 ---
 
@@ -46,7 +97,79 @@ Last updated: 2026-09-11
 
 ---
 
-## Plasticity Rule — Design Decisions and Why
+## Architecture decisions (2026-09-14)
+
+Context for these: after the broken-merge fix, the question came up of
+*how* to reconcile the explicit two-snapshot contrastive rule
+(`SimplePlasticity`, array-level) with Anya's per-edge `Memristor` class,
+which only ever sees one continuously-running local average `Q_avg` - it
+has no way to know "am I in the free phase or the clamped phase right now".
+
+**Decision: both coexist, not one replacing the other.**
+`network/dynamics.py`'s `VoltageDynamics` and the `Memristor` array are now
+the single shared electrical substrate. On top of that substrate there are
+two independent ways to move a `Memristor`'s `w`:
+1. **Explicit/batch** (`training/plasticity.py`, `SimplePlasticity`): compute
+   `Q_free`/`Q_clamped` from two voltage snapshots externally, call
+   `update_weights`, write the result back with `network.builders.set_weights`.
+   This is what reproduces the historical plateau numbers (see Test results).
+2. **Local/online** (`training/rules.py`, `Memristor.plast_func`, driven by
+   `training/trainer.py`): each edge continuously integrates its own
+   windowed `Q_avg` and evolves `w` every micro-step via `mem.step()`.
+
+### Global vs local theta
+
+A `Memristor` driven purely by its own `Q_avg` (option 2 above) cannot
+learn at all if `Q` is sign-definite (e.g. the quadratic `(ΔV)^2` used
+throughout this project): `dw/dt = -eta * Q_avg * (1-w) - gamma*w` is
+always ≤0, so every edge just decays to `g_min` regardless of phase -
+verified empirically, not just argued (weights collapsed to `w_mean=0.000`,
+MSE got worse than random init). A local rule needs *something* to compare
+`Q_avg` against.
+
+Considered:
+- **A local clock/phase signal** telling each edge "you are now in the
+  clamped phase" - rejected: cheap in principle but still per-element
+  information beyond current/voltage, which we'd rather not require.
+- **A second, slower local integrator per edge** (BCM-style metaplasticity:
+  `theta_ij` = a low-pass of the edge's own `Q_avg`, `dw/dt` driven by
+  `Q_avg - theta_ij`). Physically real (see literature below), but is a
+  specific composite/dual-timescale device, not a property of a generic
+  memristor - a real design commitment, not something free.
+- **A single global `theta`, shared by the whole network** (chosen):
+  physically like a shared slow field (substrate temperature, a common
+  bias rail) that every edge's dynamics already couples to in real
+  crossbar hardware (thermal crosstalk between cells is a well-documented,
+  usually-parasitic effect - here it's exactly the mechanism we want).
+  Needs only one extra scalar for the whole circuit, not one per edge.
+
+**Decision: global `theta` is the actual default** (`training/trainer.py`
+owns it, `training/rules.py`'s `global_threshold_rule` is the rule).
+**Local per-edge `theta` is kept as a real extension point, not built now**:
+`Memristor.plast_func(Q_avg, w, theta)` always takes `theta` as a plain
+argument - today `Trainer` always supplies the same shared value to every
+edge via `mem.set_theta(...)`; a future version could instead have
+`Memristor` maintain its own local low-pass of `Q_avg` and never call
+`set_theta` from outside. That only changes where `theta` comes from, not
+the rule signature or anything that calls it.
+
+Literature grounding (for when this needs defending, or if a specific
+material platform gets chosen later and this needs revisiting): dual-mode
+volatile+nonvolatile dynamics coexisting in one device, composite
+diffusive+drift memristor synapses for short-term/long-term plasticity, and
+direct experimental demonstration of BCM-style metaplasticity in
+memristors are all published (Wang et al., *Nature Materials* 2017;
+"Implementation of Neuro-Memristive Synapse for Long- and Short-Term
+Bio-Synaptic Plasticity", PMC7831501; Ding et al., dual-mode SiO2
+memristors, *Advanced Science*; "Emulation of synaptic metaplasticity in
+memristors"). We are not tied to a specific material, so this is
+background, not a constraint - variant 3 (global, shared) was chosen for
+being the more economical assumption, not because the alternative is
+implausible.
+
+---
+
+## Plasticity Rule — Design Decisions and Why (historical, pre-merge)
 
 Current rule in `SimplePlasticity.update_weights`:
 
@@ -54,17 +177,25 @@ Current rule in `SimplePlasticity.update_weights`:
     dw = −eta * delta_Q * (1 − w) − gamma * w
     w ← clip(w + dw * dt_plasticity, 0, 1)
 
-with observable `Q_ij = V_j − V_i` (linear, signed) integrated by EMA with time constant `tau_integrate`.
+with observable `Q_ij` intended to be `V_j − V_i` (linear, signed)
+integrated by EMA with time constant `tau_integrate` - **but see the
+correction above: the code paths that actually produced the numbers below
+use the quadratic snapshot `compute_Q_from_voltages` instead.**
 
 Each of the following was found by debugging, not chosen a priori:
 
 1. **Sign is negative.** With `+eta` the 3-node chain test drove V[1] *away* from
    the target (w[1,2] collapsed to 0). Flipping the sign fixed it.
 
-2. **Observable is linear, not quadratic.** With `Q = (ΔV)²`, two output nodes at 0.5
+2. **Observable is linear, not quadratic** *(see correction above - this was the
+   intent, but the code that generated the plateau numbers uses quadratic Q,
+   and switching to the literal linear Q on the 4→3→4 case made things worse,
+   not better. Unresolved.)* With `Q = (ΔV)²`, two output nodes at 0.5
    being pulled to 1 and to 0 respectively give identical Q=0.25 on their edges, so
    plasticity cannot tell them apart and drives all weights identically. Symmetry is
-   never broken. Linear `Q = ΔV` keeps the direction.
+   never broken - in theory. In practice the 4→3→4 case *does* break symmetry
+   correctly even with quadratic Q (outputs track the pattern), so this
+   reasoning is not the whole story; treat it as a hypothesis, not settled.
 
 3. **Conductance range must be wide.** With `g_min=0.1`, `w∈[0.3,0.7]` the resistance
    spread is only ~2×; all outputs converge to the same value and stay there.
@@ -74,7 +205,8 @@ Each of the following was found by debugging, not chosen a priori:
 4. **EMA vs. snapshot.** `compute_Q_from_voltages` (snapshot of final state) was added as
    a diagnostic alternative to `integrate_observable_ema`. When phases are long relative to
    `tau_integrate` they agree; snapshot is less physical. Currently `test_plasticity.py` prints
-   both. Prefer EMA; snapshot exists for comparison.
+   both. **Correction: `test_plasticity.py`'s actual MSE/training loop uses the snapshot
+   (quadratic) path, not EMA - "prints both" refers only to the cycle-10 diagnostic block.**
 
 5. **Saturation `(1−w)`** is kept because it is physical (finite max conductance).
    Removing it was considered and rejected for now.
@@ -89,12 +221,17 @@ Things that were tried and did **not** help the plateau:
 - `beta_clamped = 200` — **numerically unstable** at `dt=0.001`; voltages diverge to 1e5, hidden nodes go negative.
   Longer exposure makes it worse. Keep `beta ≤ ~100` with `g_penalty=10` at `dt=0.001`, or reduce `dt`.
 - Increasing `eta` — pointless because `eta` and `beta` only enter via the contrast; same behaviour as raising `beta`.
+- **(2026-09-14)** Switching the observable to the literal linear signed `Q = V_j - V_i`
+  on the 4→3→4 case — makes it worse (MSE 0.25→0.41), see correction above.
+- **(2026-09-14)** Driving `w` purely from each edge's own local `Q_avg` with no
+  reference to compare against — collapses every weight to `g_min` (no learning
+  signal at all, not just a worse plateau). See "Global vs local theta" above.
 
 ---
 
 ## Open Problems
 
-### 1. Plateau in 4→3→4 (vanishing gradient)
+### 1. Plateau in 4→3→4 (vanishing gradient?)
 
 Diagnostics at the plateau vs. early cycles:
 
@@ -105,6 +242,19 @@ As MSE drops, free and clamped states get closer, the contrast shrinks, and upda
 out before reconstruction is good. Weights are not stuck at the [0,1] boundaries
 (mean≈0.48, std≈0.24, min≈0.07, max≈0.92), so it is not saturation.
 
+**(2026-09-14) Independent evidence the plateau is not just an artifact of this
+one rule's plumbing**: a structurally different rule (local online `Q_avg`
+compared to a slowly-adapting global `theta`, no explicit two-snapshot
+contrast at all - see "Global vs local theta") lands on a very similar MSE
+(~0.041, vs. ~0.044-0.050 here) on the same case, via a qualitatively
+different trajectory (collapse-to-`g_min` then self-organized recovery,
+rather than smooth descent). Two different algorithms hitting the same
+ceiling is *some* evidence this is a real property of this
+topology/observable/saturation combination rather than a bug in one
+specific update rule - but it is not a proof, and the informal run that
+showed this did not go through the real `Trainer`/`Memristor` path (see
+Test results), so treat it as a lead, not a conclusion.
+
 **Note:** 4→3→4 is the minimal meaningful test. The target architecture is ~64→8→64
 (8× compression), so this must work here first. Do not blame the bottleneck.
 
@@ -114,6 +264,14 @@ Candidate next steps (untested):
 - Revisit the observable: current is voltage; could be current `I_ij` or signed power.
 - Check whether the linear observable + this rule is actually a gradient of anything
   (equilibrium-propagation consistency) — we have not derived it, only tuned it.
+  Concretely: the standard EP gradient estimator is `(1/beta) * (Q_beta - Q_0)` in the
+  beta→0 limit; this rule uses the raw, un-normalized `(Q_clamped - Q_free)`, and `eta`/`beta`
+  are known to be degenerate (see "Increasing eta" above) - that degeneracy is a symptom of
+  the missing `1/beta` normalization, and is worth deriving properly rather than re-tuning
+  around.
+- Try the global-theta local rule (`training/rules.py`) through the real `Trainer` for a
+  full-length run (the informal prototype run above used a fast vectorized stand-in, not
+  the actual `Memristor`/`Trainer` objects) and see if it actually breaks past ~0.04.
 
 ### 2. Beta / dt stability
 
@@ -124,8 +282,17 @@ scheme for exactly this reason — RK4 or `scipy.integrate` is a drop-in).
 ### 3. `test_plasticity.py` is messy
 
 It has accumulated a lot of inline diagnostics (EMA vs. manual Q, dw ranges, weight stats,
-convergence flags, adaptive beta remnants). Before building `Trainer`, clean it back down to
-the config dataclass + loop + a small diagnostic block.
+convergence flags, adaptive beta remnants). It was ported to Grid/Memristor as-is
+(2026-09-14) to keep the fix minimal and reviewable; the cleanup below is still
+pending.
+
+### 4. `training/trainer.py` is not wired to the Bars & Stripes dataset yet
+
+It runs the free/clamped protocol for a single pattern (`run_cycle(pattern)`);
+looping it over `datasets.bars_stripes.BarsAndStripes` patterns is straightforward
+but not done. Also not yet load-tested at the target ~64→8→64 scale - the
+per-edge `Memristor` object overhead (see Test results) will matter more there
+than it does at 4→3→4.
 
 ---
 
@@ -136,16 +303,28 @@ the config dataclass + loop + a small diagnostic block.
   No hard-coded `dt` / `max_steps` scattered through a file.
 - Research-code style: short docstrings, minimal validation, parameters as function args.
 - Tests are plain scripts runnable with `python3 tests/<name>.py`; they save plots to cwd.
+  (`test_bars_stripes.py` is the exception - it's a real pytest file, needs `pytest` installed.)
 - Setup: `python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt && pip install -e .`
-  (`pip install -e .` is what makes `from network... / from training...` resolve.)
+  (`pip install -e .` is what makes `from network... / from training...` resolve without the
+  `sys.path.insert` boilerplate at the top of each test file.)
+- New convention (2026-09-14): building a `Grid` + `Memristor` array from a plain
+  (adjacency, weights, iv_function) description - the shape most tests/experiments start
+  from - goes through `network/builders.py` (`build_memristor_array` for plastic edges,
+  `build_static_memristor_array` for a fixed, non-learning solver, `extract_weights`/
+  `set_weights` to read/write a plain matrix back). Don't hand-roll this per test.
 
 ---
 
 ## Next Steps (rough order)
 
-1. Try momentum on the 4→3→4 plateau.
-2. Clean up `test_plasticity.py`.
-3. Create `training/trainer.py` once single-pattern learning is reliable.
-4. Train on the full 4×4 Bars & Stripes dataset.
-5. Training visualization (MSE vs. cycle, weight evolution, reconstruction animation).
-6. Interface with Anya's memristor model and Volodya's topology code.
+1. Run the global-theta local rule through the real `Trainer` for a full-length
+   (multi-minute) run and see whether it actually breaks past the ~0.04 MSE ceiling,
+   or lands there too (see Open Problems #1).
+2. Derive the EP gradient correspondence properly for this rule (the missing `1/beta`
+   normalization question) instead of continuing to hand-tune around the plateau.
+3. Try momentum on `dw` as a cheaper thing to test first.
+4. Clean up `test_plasticity.py` (Open Problems #3).
+5. Wire `training/trainer.py` to the full 4×4 Bars & Stripes dataset (Open Problems #4).
+6. Training visualization (MSE vs. cycle, weight evolution, reconstruction animation).
+7. Load-test at (or scale down gracefully toward) the target ~64→8→64 architecture -
+   per-edge Memristor object overhead has not been checked at that size.

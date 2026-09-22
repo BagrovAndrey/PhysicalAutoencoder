@@ -15,6 +15,7 @@ results/
 *.egg-info/
 venv/
 .venv/
+*.patch
 
 # Editors
 .vscode/

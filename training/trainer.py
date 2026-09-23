@@ -20,6 +20,9 @@ match either the Memristor or VoltageDynamics constructors that ended up
 being implemented.
 """
 
+import warnings
+from typing import Optional
+
 import numpy as np
 
 from network.dynamics import VoltageDynamics
@@ -36,10 +39,28 @@ class Trainer:
                  exposure_time_free: float = 10.0, exposure_time_clamped: float = 10.0,
                  micro_steps_per_phase: int = 200,
                  dt: float = 1e-3, tol: float = 1e-10,
-                 tau_theta: float = 400.0):
+                 tau_theta: float = 400.0,
+                 relax_max_steps: Optional[int] = None,
+                 check_window: bool = True):
+        """
+        Args (beyond the obvious):
+            relax_max_steps: step budget for each electrical relaxation.
+                Defaults to exposure_time/dt, which is the "fixed exposure
+                time" protocol - but note that couples two independent
+                things: how long the network is driven (plasticity
+                timescale) and how far the solver is allowed to relax.
+                Set this explicitly to vary one without the other.
+            check_window: warn if each memristor's averaging window does not
+                span exactly one phase. See the warning text for why that
+                matters - it is the difference between learning and not.
+        """
         self.grid = grid
         self.memristors = memristors
         self.penalty_pairs = penalty_pairs
+        self.relax_max_steps = relax_max_steps
+
+        if check_window:
+            self._check_window_matches_phase(micro_steps_per_phase)
 
         self.beta_free = beta_free
         self.beta_clamped = beta_clamped
@@ -58,6 +79,38 @@ class Trainer:
         # The one shared, slowly-adapting reference value (see module
         # docstring). Starts at 0.0 and is updated in _evolve_phase.
         self.theta = 0.0
+
+    def _check_window_matches_phase(self, micro_steps_per_phase: int) -> None:
+        """
+        Each Memristor averages Q over a boxcar window of `window_pts`
+        samples, and one phase is `micro_steps_per_phase` samples long.
+        That ratio is not a free tuning knob - it decides whether learning
+        happens at all (measured 2026-09-23, 4->3->4 / [1,0,1,0]):
+
+            window_pts / micro_steps = 1.0   ->  MSE 0.242 -> 0.033
+            window_pts / micro_steps = 0.5   ->  MSE 0.242 -> 0.493 (no learning)
+
+        Why: V is held constant within a phase, so a window shorter than the
+        phase saturates at the current phase's Q and carries no memory of
+        the other phase. The lag of a window exactly one phase long is what
+        encodes the per-edge free/clamped contrast that plasticity needs.
+        Physically this says the device's internal relaxation time must be
+        matched to the drive period - it is a constraint on the element, not
+        a hyperparameter.
+        """
+        windows = {mem.window_pts for mem in self.memristors.ravel() if mem is not None}
+        if not windows:
+            return
+        bad = {w for w in windows if w != micro_steps_per_phase}
+        if bad:
+            warnings.warn(
+                f"memristor window_pts {sorted(bad)} != micro_steps_per_phase "
+                f"({micro_steps_per_phase}). The averaging window should span "
+                f"exactly one phase, otherwise the free/clamped contrast is lost "
+                f"and the network will not learn (it will still run and stay "
+                f"finite, which is what makes this easy to miss). "
+                f"Pass check_window=False to silence.",
+                RuntimeWarning, stacklevel=3)
 
     def _mean_Q_instant(self, V: np.ndarray) -> float:
         """Network-wide average of the instantaneous local observable
@@ -122,7 +175,9 @@ class Trainer:
             V_init,
             beta=self.beta_free,
             dt=self.dt, tol=self.tol,
-            max_steps=int(self.exposure_time_free / self.dt),
+            max_steps=self.relax_max_steps
+            if self.relax_max_steps is not None
+            else int(self.exposure_time_free / self.dt),
         )
         V_free = free['V_final']
         self._evolve_phase(V_free, self.exposure_time_free)
@@ -132,7 +187,9 @@ class Trainer:
             penalty_pairs=self.penalty_pairs,
             beta=self.beta_clamped, g_penalty=self.g_penalty,
             dt=self.dt, tol=self.tol,
-            max_steps=int(self.exposure_time_clamped / self.dt),
+            max_steps=self.relax_max_steps
+            if self.relax_max_steps is not None
+            else int(self.exposure_time_clamped / self.dt),
         )
         V_clamped = clamped['V_final']
         self._evolve_phase(V_clamped, self.exposure_time_clamped)

@@ -62,7 +62,7 @@ actually verified to run now.
 - `tests/test_dynamics_basic.py`, `test_dynamics_autoencoder.py`, `test_network_visualization.py`: pass.
 - `tests/test_plasticity_simple.py` (3-node chain, target V[1]=0.68): **passes**, converges to target (95% error reduction over 50 cycles) - numerically identical behaviour to before the merge broke it.
 - `tests/test_plasticity.py`, 4→3→4 on pattern [1,0,1,0], quadratic `Q`: MSE 0.247 → 0.050 over 40 cycles (reduced from the historical 300-cycle run for test runtime - see the note in the file). This reproduces the historical plateau trajectory exactly (same numbers to 4 significant figures as the pre-merge run at matching cycle counts): output settles toward `[~0.73, ~0.13, ~0.73, ~0.13]` instead of `[1,0,1,0]`. **Still open, see below.**
-- `tests/test_with_memristors.py`: new smoke test (Grid + Memristor + Trainer, `global_threshold_rule`). Verifies the machinery runs, stays numerically finite, and moves weights - not a quality benchmark (short exposure times for test speed; see its docstring). A quick informal run of the *same rule* (fast vectorized prototype, not through Trainer's per-object loop) on the 4→3→4/[1,0,1,0] case, run long enough (~70 cycles of 10s exposure), reached MSE≈0.041 - comparable to the explicit-contrast plateau, after an initial ~35-cycle collapse-then-recovery transient. Worth re-checking through the real `Trainer` once someone has time for a multi-minute run.
+- `tests/test_with_memristors.py`: new smoke test (Grid + Memristor + Trainer, `global_threshold_rule`). Verifies the machinery runs, stays numerically finite, and moves weights - not a quality benchmark (short exposure times for test speed; see its docstring). ~~A quick informal run of the *same rule* ... reached MSE≈0.041~~ — **this claim was wrong, corrected 2026-09-23: see "The window must span one phase" below.** That number came from `experiments/bcm_threshold_check.py`, which uses a **local per-edge theta**, not the global one the project implements. The global rule does reach comparable numbers (0.033), but only under a condition nobody had identified at the time, and the sentence as written sent a reader straight into a non-learning configuration.
 
 ### Smoke sweep (2026-09-23): `tests/test_smoke_sweep.py`
 
@@ -115,6 +115,51 @@ and `sim.py --observable` gets them for free.
 `test_smoke_sweep.py` section 6 checks the CLI starts, that every subcommand parses,
 that a CLI relaxation reproduces the library's number exactly, and that a diverging run
 exits non-zero rather than printing garbage.
+
+### The window must span one phase (2026-09-23) — read this before tuning anything
+
+Found by Andrey running `sim.py train --rule global-theta` on the shipped defaults and
+getting a flat, dead MSE=0.5. The defaults were wrong, but chasing that turned up a real
+and previously unstated physical constraint.
+
+**Each memristor's averaging window must span exactly one phase:**
+`window_pts == micro_steps_per_phase`. Measured on 4→3→4 / `[1,0,1,0]`, 30 cycles,
+everything else held fixed:
+
+| `window_pts / micro_steps` | final MSE |
+|---|---|
+| 1.00 | **0.033** (learns) |
+| 0.50 | 0.493 (dead) |
+| 0.25 | 0.493 (dead) |
+| 0.05 | 0.493 (dead) |
+
+Why, mechanically: `V` is held constant within a phase (quasi-static), so every sample
+the window sees during a phase is identical. A window *shorter* than the phase therefore
+saturates at the current phase's `Q` well before the phase ends, and carries no trace of
+the other phase — so `Q_avg − theta` reduces to a purely spatial comparison ("is this
+edge busier than the network average?"), which contains no reconstruction error signal.
+A window exactly one phase long never fully catches up: it lags, and that lag *is* the
+memory of the other phase. The per-edge free/clamped contrast lives entirely in that lag.
+
+This is a statement about the physical element, not a hyperparameter: **the device's
+internal relaxation time must be matched to the drive period.** Too fast a memristor
+forgets the other phase and cannot learn, no matter how the rest is tuned. Worth putting
+in the proposal — it is a concrete, testable constraint on the material, and it arrived
+from the simulation rather than from theory.
+
+`Trainer` now warns when the ratio is off (`check_window=False` to silence).
+
+Two further things this exposed:
+
+- **`exposure_time` was overloaded.** It set both the plasticity timescale *and* the
+  relaxation budget (`max_steps = exposure/dt`), so the two could not be varied
+  independently. `Trainer(relax_max_steps=...)` now separates them.
+- **The free phase never actually reaches equilibrium** under the standard protocol
+  (0/30 cycles converged at `exposure=10`, which allows 10k steps against the ~40k it
+  needs). That is the intended "fixed exposure time" protocol, but it was invisible.
+  Letting it fully relax gives MSE 0.052 instead of 0.033 — so the learning is *real*,
+  not an artifact of truncation, and 0.052 lands essentially on the explicit-contrastive
+  plateau of 0.050. Both paths agree. `sim.py train` now reports the convergence count.
 
 ### Stability boundary, quantified (2026-09-23)
 
@@ -329,18 +374,26 @@ As MSE drops, free and clamped states get closer, the contrast shrinks, and upda
 out before reconstruction is good. Weights are not stuck at the [0,1] boundaries
 (mean≈0.48, std≈0.24, min≈0.07, max≈0.92), so it is not saturation.
 
-**(2026-09-14) Independent evidence the plateau is not just an artifact of this
-one rule's plumbing**: a structurally different rule (local online `Q_avg`
-compared to a slowly-adapting global `theta`, no explicit two-snapshot
-contrast at all - see "Global vs local theta") lands on a very similar MSE
-(~0.041, vs. ~0.044-0.050 here) on the same case, via a qualitatively
-different trajectory (collapse-to-`g_min` then self-organized recovery,
-rather than smooth descent). Two different algorithms hitting the same
-ceiling is *some* evidence this is a real property of this
-topology/observable/saturation combination rather than a bug in one
-specific update rule - but it is not a proof, and the informal run that
-showed this did not go through the real `Trainer`/`Memristor` path (see
-Test results), so treat it as a lead, not a conclusion.
+**(2026-09-23, supersedes a weaker 2026-09-14 note) Independent evidence the plateau is
+not an artifact of one rule's plumbing.** The online global-theta rule — structurally
+different, no explicit two-snapshot contrast anywhere — was run through the real
+`Trainer`, not a prototype:
+
+| path | final MSE |
+|---|---|
+| explicit contrastive (two snapshots) | 0.050 |
+| online global theta, free phase truncated | 0.033 |
+| online global theta, free phase fully relaxed | 0.052 |
+
+Done properly (fully relaxed), the two agree to within 4%: **0.052 vs 0.050**. They get
+there by qualitatively different trajectories — smooth descent versus
+collapse-then-recovery — which makes the agreement more meaningful, not less. Two
+independent algorithms hitting the same ceiling is now reasonably strong evidence this is
+a real property of this topology / observable / saturation combination, rather than a bug
+in either rule. It is still not a proof — both share the same electrical model, the same
+quadratic `Q`, and the same `(1-w)` saturation term, so a common cause in any of those
+would produce exactly this agreement. The `1/beta` normalization question below remains
+the most likely such common cause and is the thing to attack next.
 
 **Note:** 4→3→4 is the minimal meaningful test. The target architecture is ~64→8→64
 (8× compression), so this must work here first. Do not blame the bottleneck.
@@ -431,9 +484,12 @@ scale costs ~5 hours. Making experiments cheap comes before running more of them
    double loop over node pairs with dense matrix ops. Expect 1–2 orders of magnitude;
    `test_smoke_sweep.py` + `test_plasticity.py` (which reproduces exact numbers) together
    make this safe to do as a pure refactor with a numerical check at the end.
-1. Run the global-theta local rule through the real `Trainer` for a full-length
-   (multi-minute) run and see whether it actually breaks past the ~0.04 MSE ceiling,
-   or lands there too (see Open Problems #1). Much cheaper after step 0.
+1. ~~Run the global-theta local rule through the real `Trainer`~~ **Done 2026-09-23.**
+   It lands on the same ceiling: 0.033 with the truncated relaxation, 0.052 with the
+   free phase fully settled, against the explicit-contrastive 0.050. Two structurally
+   different update rules reaching the same number is now decent evidence that the
+   plateau is a property of the model or the observable, not of either rule — which
+   sharpens Open Problems #1 considerably.
 2. Derive the EP gradient correspondence properly for this rule (the missing `1/beta`
    normalization question) instead of continuing to hand-tune around the plateau.
 3. Try momentum on `dw` as a cheaper thing to test first.

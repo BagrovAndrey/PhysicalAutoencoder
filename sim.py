@@ -70,11 +70,16 @@ def make_network(args, plastic=False, plast_func=None, obs_func=None):
     iv = IV_FUNCS[args.iv]
 
     if plastic:
+        # window_pts defaults to one full phase, and dt_local follows from
+        # the exposure time - these are not independent knobs, see
+        # Trainer._check_window_matches_phase.
+        window_pts = args.window_pts if args.window_pts else args.micro_steps
+        dt_local = args.exposure / args.micro_steps
         memristors = build_memristor_array(
             adjacency, weights, iv_func=iv,
             obs_func=obs_func or quadratic_observable,
             plast_func=plast_func or (lambda Q, w, th: 0.0),
-            window_pts=args.window_pts, dt_local=args.dt_local,
+            window_pts=window_pts, dt_local=dt_local,
             g_min=args.g_min, g_max=args.g_max)
     else:
         memristors = build_static_memristor_array(adjacency, weights, iv)
@@ -218,16 +223,23 @@ def train_online(args, net, patterns, log):
         beta_free=0.0, beta_clamped=args.beta, g_penalty=args.g_penalty,
         exposure_time_free=args.exposure, exposure_time_clamped=args.exposure,
         micro_steps_per_phase=args.micro_steps, dt=args.dt, tol=args.tol,
-        tau_theta=args.tau_theta)
+        tau_theta=args.tau_theta, relax_max_steps=args.relax_max_steps)
 
+    n_free_converged = 0
     for cycle in range(args.cycles):
         pattern = patterns[cycle % len(patterns)]
         res = trainer.run_cycle(pattern)
+        n_free_converged += int(res['free_converged'])
         w = extract_weights(net['memristors'], net['adjacency'])[net['adjacency']]
         if not np.all(np.isfinite(w)):
             return None, "weights went non-finite"
         log(cycle, res['mse_free'], res['V_free'][net['output_nodes']], res['theta'], w)
 
+    print(f"\n  free phase reached equilibrium in {n_free_converged}/{args.cycles} cycles")
+    if n_free_converged == 0:
+        print("    (relaxation is cut off by the exposure-time budget - that is the")
+        print("     intended protocol, but raise --relax-max-steps to see the")
+        print("     difference between it and a fully settled network)")
     return extract_weights(net['memristors'], net['adjacency']), None
 
 
@@ -560,14 +572,20 @@ def add_learning_args(p):
                    help='contrastive: weight-update step size')
     g.add_argument('--tau-theta', type=float, default=40.0,
                    help='global-theta: time constant of the shared threshold')
-    g.add_argument('--exposure', type=float, default=1.0,
-                   help='global-theta: exposure time per phase')
-    g.add_argument('--micro-steps', type=int, default=20,
-                   help='global-theta: plasticity micro-steps per phase')
-    g.add_argument('--window-pts', type=int, default=20,
-                   help='memristor local averaging window length')
-    g.add_argument('--dt-local', type=float, default=0.05,
-                   help='memristor local integration step')
+    g.add_argument('--exposure', type=float, default=10.0,
+                   help='global-theta: exposure time per phase (default: 10; '
+                        'shorter cuts the relaxation off far from equilibrium '
+                        'and the network stops learning)')
+    g.add_argument('--micro-steps', type=int, default=200,
+                   help='global-theta: plasticity micro-steps per phase (default: 200; '
+                        'below ~100 learning degrades)')
+    g.add_argument('--window-pts', type=int, default=None,
+                   help='memristor averaging window, in samples. Defaults to '
+                        '--micro-steps, i.e. exactly one phase. Changing this '
+                        'ratio away from 1.0 stops the network learning - see '
+                        'DEVELOPMENT.md, "The window must span one phase".')
+    g.add_argument('--relax-max-steps', type=int, default=None,
+                   help='relaxation step budget; defaults to exposure/dt')
 
 
 def main():

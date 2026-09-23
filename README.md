@@ -67,9 +67,12 @@ Every subcommand takes `--help`. Some things worth trying:
 # Watch the penalty coupling pull the output toward the input
 python3 sim.py sweep --param beta --values 0,0.1,1,10,100 --max-steps 30000
 
-# Compare the two plasticity paths on the same problem
+# Compare the two plasticity paths on the same problem (both reach ~0.03-0.05)
 python3 sim.py train --rule contrastive  --cycles 40
-python3 sim.py train --rule global-theta --cycles 40
+python3 sim.py train --rule global-theta --cycles 25
+
+# See what a fully-relaxed free phase does (the default protocol truncates it)
+python3 sim.py train --rule global-theta --cycles 25 --relax-max-steps 100000
 
 # Does the learning rate matter, or is it degenerate with beta? (see DEVELOPMENT.md)
 python3 sim.py sweep --param eta --values 0.1,0.3,1.05,3.0 --train --cycles 20
@@ -89,6 +92,12 @@ python3 sim.py relax --dt 0.05 --beta 100
 > Heads-up: a "not converged" relaxation is usually **not** an error — relaxing for a
 > fixed exposure time is the intended physical protocol. A `DIVERGED` result is a real
 > failure; lower `--dt`. See the stability warning under Key Parameters.
+
+> **If you change `--micro-steps` or `--exposure`, leave `--window-pts` alone.** The
+> memristor's averaging window has to span exactly one phase or the network silently
+> stops learning (it keeps running and stays finite — it just never improves). `sim.py`
+> ties them together by default and `Trainer` warns if they drift apart. The reasoning,
+> and the measured table, are in DEVELOPMENT.md under "The window must span one phase".
 
 ## Project Structure
 ```

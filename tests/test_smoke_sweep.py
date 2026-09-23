@@ -434,6 +434,85 @@ def test_online_theta_path():
           fast > slow, f"theta(tau=20) = {fast:.5f} > theta(tau=400) = {slow:.5f}")
 
 
+def test_paths_actually_learn():
+    """
+    The gap that let a completely non-learning default configuration ship
+    with 60 green checks: everything above asserts "finite and bounded",
+    which a dead network satisfies perfectly. These assert the thing we
+    actually care about - that reconstruction error goes DOWN.
+    """
+    print("\n[4f] Both plasticity paths actually learn")
+
+    adjacency, weights, input_nodes, output_nodes, penalty_pairs = build_autoencoder(4, 3)
+    pattern = np.array([1.0, 0.0, 1.0, 0.0])
+
+    # --- online / global theta -----------------------------------------
+    exposure, micro = 10.0, 200
+    grid = Grid(adjacency, input_nodes, pattern.copy(), capacitances=1.0)
+    memristors = build_memristor_array(
+        adjacency, weights, iv_func=relu_iv, obs_func=quadratic_obs,
+        plast_func=make_rule(global_threshold_rule, eta=1.05, gamma=0.001),
+        window_pts=micro, dt_local=exposure / micro)
+    trainer = Trainer(grid, memristors, penalty_pairs, beta_clamped=100.0,
+                      g_penalty=10.0, exposure_time_free=exposure,
+                      exposure_time_clamped=exposure, micro_steps_per_phase=micro,
+                      dt=0.001, tau_theta=40.0)
+    mses = [trainer.run_cycle(pattern)['mse_free'] for _ in range(8)]
+    check("global-theta path reduces reconstruction error",
+          mses[-1] < 0.12 and mses[-1] < 0.6 * mses[0],
+          f"MSE {mses[0]:.5f} -> {mses[-1]:.5f}")
+
+    # --- explicit contrastive -------------------------------------------
+    w = weights.copy()
+    grid = Grid(adjacency, input_nodes, pattern.copy(), capacitances=1.0)
+    mem = build_memristor_array(adjacency, w, iv_func=relu_iv, obs_func=quadratic_obs,
+                                plast_func=lambda Q, ww, th: 0.0, window_pts=1, dt_local=1.0)
+    solver = VoltageDynamics(grid, mem)
+    plasticity = SimplePlasticity(eta=1.05, gamma=0.001, tau_integrate=20.0)
+    V_init = np.zeros(len(adjacency)); V_init[input_nodes] = pattern
+    first = last = None
+    for cycle in range(12):
+        set_weights(mem, adjacency, w)
+        free = solver.relax_transient(V_init.copy(), beta=0.0, dt=0.001,
+                                      max_steps=10000, tol=1e-10)
+        clamped = solver.relax_transient(free['V_final'], penalty_pairs=penalty_pairs,
+                                         beta=100.0, g_penalty=10.0, dt=0.001,
+                                         max_steps=10000, tol=1e-10)
+        w = plasticity.update_weights(
+            w, compute_Q_from_voltages(free['V_final'], adjacency),
+            compute_Q_from_voltages(clamped['V_final'], adjacency), adjacency, 1.0)
+        mse = float(np.mean((free['V_final'][output_nodes] - pattern) ** 2))
+        first = mse if cycle == 0 else first
+        last = mse
+    check("contrastive path reduces reconstruction error",
+          last < 0.12 and last < 0.6 * first, f"MSE {first:.5f} -> {last:.5f}")
+
+
+def test_window_phase_guard():
+    """The window/phase ratio decides whether learning happens at all, and
+    a mismatch is otherwise silent - so it must warn."""
+    print("\n[4g] Window-vs-phase mismatch is reported")
+
+    import warnings as _w
+    adjacency, weights, input_nodes, _, penalty_pairs = build_autoencoder(4, 3)
+    pattern = np.array([1.0, 0.0, 1.0, 0.0])
+
+    def build(window_pts):
+        grid = Grid(adjacency, input_nodes, pattern.copy(), capacitances=1.0)
+        mem = build_memristor_array(
+            adjacency, weights, iv_func=relu_iv, obs_func=quadratic_obs,
+            plast_func=make_rule(global_threshold_rule),
+            window_pts=window_pts, dt_local=0.05)
+        with _w.catch_warnings(record=True) as caught:
+            _w.simplefilter("always")
+            Trainer(grid, mem, penalty_pairs, micro_steps_per_phase=200)
+        return [x for x in caught if issubclass(x.category, RuntimeWarning)]
+
+    check("mismatched window warns", len(build(100)) == 1,
+          build(100)[0].message.args[0][:60] + "..." if build(100) else "no warning")
+    check("matched window is silent", len(build(200)) == 0)
+
+
 def test_rule_swapping():
     print("\n[4c] Swapping the plasticity rule (the one-line requirement)")
 
@@ -652,6 +731,8 @@ if __name__ == "__main__":
     test_scale()
     test_explicit_contrastive_path()
     test_online_theta_path()
+    test_paths_actually_learn()
+    test_window_phase_guard()
     test_rule_swapping()
     test_theta_extension_point()
     test_dataset_integration()

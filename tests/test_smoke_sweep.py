@@ -16,6 +16,7 @@ Grouped as:
   3. Scale                - 4-3-4 up to 16-8-16, with cost extrapolation
   4. Plasticity paths     - explicit contrastive + online global-theta
   5. Reproducibility      - same seed, same numbers
+  6. CLI                  - sim.py starts, parses, and agrees with the library
 
 Run with:  python3 tests/test_smoke_sweep.py
 """
@@ -29,8 +30,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import numpy as np
 
 from grid.grid import Grid
-from network.builders import (build_memristor_array, build_static_memristor_array,
-                              extract_weights, set_weights)
+from network.builders import (build_autoencoder_topology, build_memristor_array,
+                              build_static_memristor_array, extract_weights, set_weights)
 from network.dynamics import VoltageDynamics
 from network.iv_characteristics import ohmic, relu_iv, sigmoid_iv, diode_iv
 from training.plasticity import SimplePlasticity, compute_Q_from_voltages
@@ -58,27 +59,11 @@ def quadratic_obs(V_drop, I):
 
 
 def build_autoencoder(n_input, n_hidden, seed=42, w_min=0.1, w_max=0.9):
-    """Fully-connected input<->hidden<->output autoencoder topology."""
-    n_output = n_input
-    n_total = n_input + n_hidden + n_output
-    rng = np.random.default_rng(seed)
-
-    adjacency = np.zeros((n_total, n_total), dtype=bool)
-    weights = np.zeros((n_total, n_total))
-
-    input_nodes = np.arange(n_input)
-    hidden_nodes = np.arange(n_input, n_input + n_hidden)
-    output_nodes = np.arange(n_input + n_hidden, n_total)
-
-    for group_a, group_b in ((input_nodes, hidden_nodes), (hidden_nodes, output_nodes)):
-        for i in group_a:
-            for j in group_b:
-                w = rng.uniform(w_min, w_max)
-                adjacency[i, j] = adjacency[j, i] = True
-                weights[i, j] = weights[j, i] = w
-
-    penalty_pairs = [(int(input_nodes[k]), int(output_nodes[k])) for k in range(n_input)]
-    return adjacency, weights, input_nodes, output_nodes, penalty_pairs
+    """Thin wrapper over the library helper, dropping hidden_nodes (which
+    most checks here don't need) to keep call sites short."""
+    adjacency, weights, inp, _hid, out, pairs = build_autoencoder_topology(
+        n_input, n_hidden, seed=seed, w_min=w_min, w_max=w_max)
+    return adjacency, weights, inp, out, pairs
 
 
 def solve_ohmic_analytically(adjacency, conductances, clamped_nodes, clamped_values):
@@ -603,6 +588,57 @@ def test_reproducibility():
           not np.allclose(w_a, w_b))
 
 
+def test_cli():
+    """The CLI is the intended way to poke at this by hand, so it has to at
+    least start, parse flags, and agree with the library it wraps."""
+    print("\n[6] Command-line interface (sim.py)")
+
+    import subprocess
+    repo = Path(__file__).parent.parent
+    sim = repo / "sim.py"
+
+    check("sim.py exists", sim.exists())
+
+    def run(*argv, timeout=300):
+        return subprocess.run([sys.executable, str(sim), *argv],
+                              capture_output=True, text=True, timeout=timeout, cwd=repo)
+
+    r = run("--help")
+    check("sim.py --help works", r.returncode == 0 and "relax" in r.stdout)
+
+    for cmd in ("relax", "train", "sweep", "stability", "bench", "info"):
+        r = run(cmd, "--help")
+        check(f"subcommand '{cmd}' has help", r.returncode == 0)
+
+    # A free-phase relaxation from the CLI must match the library directly.
+    r = run("relax", "--beta", "0", "--iv", "ohmic", "--max-steps", "50000")
+    check("sim.py relax runs", r.returncode == 0, r.stderr.strip()[:120])
+
+    adjacency, weights, input_nodes, output_nodes, _ = build_autoencoder(4, 3)
+    pattern = np.array([1.0, 0.0, 1.0, 0.0])
+    grid = Grid(adjacency, input_nodes, pattern.copy(), capacitances=1.0)
+    solver = VoltageDynamics(grid, build_static_memristor_array(adjacency, weights, ohmic))
+    V_init = np.zeros(len(adjacency)); V_init[input_nodes] = pattern
+    expected = solver.relax_transient(V_init, dt=0.001, max_steps=50000, tol=1e-10)
+    expected_mse = float(np.mean((expected['V_final'][output_nodes] - pattern) ** 2))
+
+    printed = None
+    for line in r.stdout.splitlines():
+        if "reconstruction MSE" in line:
+            printed = float(line.split(":")[1])
+    check("CLI reconstruction MSE matches the library",
+          printed is not None and abs(printed - expected_mse) < 1e-6,
+          f"CLI {printed} vs library {expected_mse:.6f}")
+
+    # The CLI must surface divergence rather than printing garbage.
+    r = run("relax", "--dt", "0.05", "--beta", "100")
+    check("CLI reports divergence with a non-zero exit code",
+          r.returncode == 1 and "blew up" in r.stdout)
+
+    r = run("sweep", "--param", "beta", "--values", "0,1,10", "--max-steps", "5000")
+    check("sim.py sweep runs and tabulates", r.returncode == 0 and "beta" in r.stdout)
+
+
 if __name__ == "__main__":
     print("=" * 72)
     print("MeroCircuit smoke / sanity sweep")
@@ -620,6 +656,7 @@ if __name__ == "__main__":
     test_theta_extension_point()
     test_dataset_integration()
     test_reproducibility()
+    test_cli()
 
     elapsed = time.perf_counter() - t_start
 

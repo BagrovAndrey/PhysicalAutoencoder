@@ -109,26 +109,31 @@ class VoltageDynamics:
                 result['V_history'] = np.array(V_history)
             return result
 
-        for step in range(max_steps):
-            with np.errstate(over='ignore', invalid='ignore'):
+        # errstate is hoisted out of the loop deliberately: entering the
+        # context manager costs ~1 us, which is a measurable fraction of a
+        # small network's per-step cost. A diverging run overflows here
+        # rather than raising, and the guard below is what reports it.
+        with np.errstate(over='ignore', invalid='ignore'):
+            for step in range(max_steps):
                 dV_dt = self._compute_time_derivative(V, penalty_pairs, beta, g_penalty)
                 V[free_nodes] += dt * dV_dt[free_nodes]
                 max_change = np.max(np.abs(dt * dV_dt[free_nodes]))
 
-            if record_history:
-                V_history.append(V.copy())
+                if record_history:
+                    V_history.append(V.copy())
 
-            # Divergence guard. Without it an unstable run is silent: V just
-            # fills with inf/nan and the caller sees converged=False, which
-            # is indistinguishable from "needed more steps". That matters
-            # most exactly when someone is sweeping beta/g_penalty/dt.
-            if divergence_threshold is not None:
-                if (not np.isfinite(max_change)
-                        or np.max(np.abs(V[free_nodes])) > divergence_threshold):
-                    return _finish(False, True, step + 1)
+                # Divergence guard. Without it an unstable run is silent: V
+                # just fills with inf/nan and the caller sees
+                # converged=False, indistinguishable from "needed more
+                # steps" - which matters most exactly when someone is
+                # sweeping beta/g_penalty/dt.
+                if divergence_threshold is not None:
+                    if (not np.isfinite(max_change)
+                            or np.max(np.abs(V[free_nodes])) > divergence_threshold):
+                        return _finish(False, True, step + 1)
 
-            if max_change < tol:
-                return _finish(True, False, step + 1)
+                if max_change < tol:
+                    return _finish(True, False, step + 1)
 
         return _finish(False, False, max_steps)
 

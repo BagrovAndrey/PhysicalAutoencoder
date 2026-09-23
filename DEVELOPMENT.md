@@ -95,6 +95,27 @@ What it establishes:
   (max per-node spread ≈0.06) — small, but not the fully collapsed state. This closes the
   mechanical half of Open Problem #4; what remains there is quality, not wiring.
 
+### `sim.py`: the CLI (2026-09-23)
+
+Everything above was previously only reachable by editing constants inside a test file,
+which made "what does this knob do" an edit-run-revert loop. `sim.py` exposes it:
+`relax` (one relaxation, with voltages, equilibrium residual and optionally every edge
+current), `train` (either plasticity path, optionally over the real dataset, optionally
+plotting), `sweep` (one parameter over several values, tabulated), `stability` (the map
+above, regenerated for your settings, plus a bisected critical `dt`), `bench` (cost vs
+size with extrapolation), and `info`.
+
+Two conventions worth keeping if you extend it. Topology construction now lives in
+`network/builders.build_autoencoder_topology` rather than being copy-pasted per test —
+the CLI and `test_smoke_sweep.py` share it. Local observables now live alongside the
+rules in `training/rules.py` (`quadratic_observable`, `linear_observable`,
+`power_observable`), so swapping `Q` is a one-line change exactly like swapping a rule,
+and `sim.py --observable` gets them for free.
+
+`test_smoke_sweep.py` section 6 checks the CLI starts, that every subcommand parses,
+that a CLI relaxation reproduces the library's number exactly, and that a diverging run
+exits non-zero rather than printing garbage.
+
 ### Stability boundary, quantified (2026-09-23)
 
 Open Problem #2 used to say "explicit Euler is stiff, lower `dt` if you raise `beta`".
@@ -120,7 +141,9 @@ suite, including `test_plasticity.py`, reproduces identical numbers (final MSE 0
 ### Cost at the target scale (2026-09-23)
 
 Per-step solver cost measured at fixed step budget: 4→3→4 (11 nodes) ≈39 µs, 9→4→9 (22)
-≈89 µs, 16→8→16 (40) ≈258 µs — consistent with the O(n²) dense node-pair loop in
+≈89 µs, 16→8→16 (40) ≈258 µs (absolute numbers are machine-dependent — vary by 2-3x
+between machines; the *scaling* is the robust part, and `sim.py bench` re-measures it on
+yours) — consistent with the O(n²) dense node-pair loop in
 `_compute_time_derivative`. Extrapolating to the proposal's **64→8→64 (136 nodes): ~3 ms
 per step, ~60 s per free+clamped cycle at 10k steps/phase, so a 300-cycle run is ~5 hours**
 of pure Python. That is the real obstacle to working at target scale, and it is not a

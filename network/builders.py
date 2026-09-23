@@ -98,6 +98,47 @@ def build_static_memristor_array(adjacency: np.ndarray,
     return memristors
 
 
+def build_autoencoder_topology(n_input: int, n_hidden: int, seed: int = 42,
+                                w_min: float = 0.1, w_max: float = 0.9):
+    """
+    Standard input <-> hidden <-> output autoencoder wiring: every input node
+    connects to every hidden node, every hidden node to every output node,
+    no input-output edges (the reconstruction coupling is the penalty link,
+    not a wire). Symmetric: adjacency[i,j] == adjacency[j,i].
+
+    Args:
+        n_input: number of input nodes (n_output is the same).
+        n_hidden: number of hidden/bottleneck nodes.
+        seed: RNG seed for the initial weights.
+        w_min, w_max: uniform range for initial weights.
+
+    Returns:
+        (adjacency, weights, input_nodes, hidden_nodes, output_nodes,
+         penalty_pairs) where penalty_pairs pairs each input node with its
+         corresponding output node, as relax_transient expects.
+    """
+    n_output = n_input
+    n_total = n_input + n_hidden + n_output
+    rng = np.random.default_rng(seed)
+
+    adjacency = np.zeros((n_total, n_total), dtype=bool)
+    weights = np.zeros((n_total, n_total))
+
+    input_nodes = np.arange(n_input)
+    hidden_nodes = np.arange(n_input, n_input + n_hidden)
+    output_nodes = np.arange(n_input + n_hidden, n_total)
+
+    for group_a, group_b in ((input_nodes, hidden_nodes), (hidden_nodes, output_nodes)):
+        for i in group_a:
+            for j in group_b:
+                w = rng.uniform(w_min, w_max)
+                adjacency[i, j] = adjacency[j, i] = True
+                weights[i, j] = weights[j, i] = w
+
+    penalty_pairs = [(int(input_nodes[k]), int(output_nodes[k])) for k in range(n_input)]
+    return adjacency, weights, input_nodes, hidden_nodes, output_nodes, penalty_pairs
+
+
 def extract_weights(memristors: np.ndarray, adjacency: np.ndarray) -> np.ndarray:
     """Read the current w of every edge back into a plain (n, n) array
     (0.0 where adjacency is False / no memristor)."""

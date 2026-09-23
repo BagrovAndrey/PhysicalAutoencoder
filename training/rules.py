@@ -54,3 +54,40 @@ def make_rule(rule_fn=global_threshold_rule, **hyperparams):
         plast_func = make_rule(global_threshold_rule, eta=0.5, gamma=0.0)
     """
     return functools.partial(rule_fn, **hyperparams)
+
+
+# --- Local observables (Memristor obs_func) ---------------------------------
+#
+# obs(V_drop, I) -> Q, the instantaneous local quantity each memristor
+# integrates over its own window. Which one is "right" is an open question
+# (see DEVELOPMENT.md, Open Problems #1) - they are collected here so
+# swapping between them is a one-line change, same as swapping rules.
+
+def quadratic_observable(V_drop: float, I: float) -> float:
+    """
+    Q = (dV)^2. The default, and what the explicit contrastive path uses
+    (training.plasticity.compute_Q_from_voltages), so the online and batch
+    paths integrate the same quantity and stay comparable.
+
+    Note it is sign-definite, which is exactly why a reference value
+    (theta) is needed at all - see the module docstring above.
+    """
+    return V_drop ** 2
+
+
+def linear_observable(V_drop: float, I: float) -> float:
+    """
+    Q = dV. Kept because DEVELOPMENT.md's design notes long claimed this was
+    the observable actually in use. It is not, and switching to it
+    measurably worsens reconstruction - see experiments/plateau_baseline.py.
+    """
+    return V_drop
+
+
+def power_observable(V_drop: float, I: float) -> float:
+    """
+    Q = dV * I, the locally dissipated power - arguably the most physical
+    choice, and sign-definite for a passive element. Listed as a candidate
+    in DEVELOPMENT.md's Open Problems but not yet evaluated.
+    """
+    return V_drop * I

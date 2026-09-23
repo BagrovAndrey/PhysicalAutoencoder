@@ -42,14 +42,58 @@ This project implements a theoretical framework for autonomous learning in physi
    pip install -e .
 ```
 
-4. **Run tests:**
+4. **Check it works:**
 ```bash
-   pytest tests/
+   python3 tests/test_smoke_sweep.py
 ```
+
+## Quick Start: the `sim.py` CLI
+
+The fastest way to get a feel for the model is to turn its knobs from the command
+line. Everything the test files hardcode is exposed as a flag.
+
+```bash
+python3 sim.py info                  # what's available and how the default net is wired
+python3 sim.py relax --beta 0        # one free-phase relaxation: voltages, currents, MSE
+python3 sim.py train                 # a 4->3->4 learning run (reproduces the docs' numbers)
+python3 sim.py sweep --param beta --values 0,1,10,100
+python3 sim.py stability             # where explicit Euler blows up
+python3 sim.py bench                 # solver cost vs network size
+```
+
+Every subcommand takes `--help`. Some things worth trying:
+
+```bash
+# Watch the penalty coupling pull the output toward the input
+python3 sim.py sweep --param beta --values 0,0.1,1,10,100 --max-steps 30000
+
+# Compare the two plasticity paths on the same problem
+python3 sim.py train --rule contrastive  --cycles 40
+python3 sim.py train --rule global-theta --cycles 40
+
+# Does the learning rate matter, or is it degenerate with beta? (see DEVELOPMENT.md)
+python3 sim.py sweep --param eta --values 0.1,0.3,1.05,3.0 --train --cycles 20
+
+# Swap the local observable - quadratic is the default, linear is what the
+# design notes long (incorrectly) claimed was in use
+python3 sim.py train --observable linear --cycles 20
+
+# Different I-V characteristic, bigger bottleneck, a real dataset
+python3 sim.py train --iv sigmoid --n-hidden 6 --cycles 20
+python3 sim.py train --dataset bars-stripes --n-input 4 --cycles 30
+
+# Break it on purpose: dt past the stability boundary
+python3 sim.py relax --dt 0.05 --beta 100
+```
+
+> Heads-up: a "not converged" relaxation is usually **not** an error — relaxing for a
+> fixed exposure time is the intended physical protocol. A `DIVERGED` result is a real
+> failure; lower `--dt`. See the stability warning under Key Parameters.
 
 ## Project Structure
 ```
 MeroCircuit/
+├── sim.py                   # CLI: relax / train / sweep / stability / bench / info
 ├── network/                 # Voltage dynamics and I-V characteristics
 │   ├── dynamics.py         # VoltageDynamics solver (Euler method), Grid/Memristor-based
 │   ├── builders.py         # Glue: (adjacency, weights, iv_func) <-> Grid + Memristor array
@@ -67,7 +111,7 @@ MeroCircuit/
 │   └── dynamics_viz.py    # Network graphs, current flows, animations
 ├── training/
 │   ├── plasticity.py      # SimplePlasticity: explicit two-snapshot contrastive rule
-│   ├── rules.py            # Memristor.plast_func rules (default: global_threshold_rule)
+│   ├── rules.py            # plast_func rules + local observables (Q = dV^2, dV, dV*I)
 │   └── trainer.py          # Trainer: free/clamped cycle + the shared theta
 ├── tests/                  # Test suite (see DEVELOPMENT.md for current pass/fail status)
 │   ├── test_dynamics_basic.py         # Simple circuits (chains, dividers)

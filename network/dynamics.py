@@ -59,7 +59,8 @@ class VoltageDynamics:
                          max_steps: int = 1000,
                          tol: float = 1e-6,
                          dt: float = 0.01,
-                         record_history: bool = False) -> dict:
+                         record_history: bool = False,
+                         divergence_threshold: Optional[float] = 1e6) -> dict:
         """
         Relax voltages to steady state via explicit Euler transient dynamics.
 
@@ -71,10 +72,19 @@ class VoltageDynamics:
             g_penalty: conductance of the penalty links.
             dt, max_steps, tol: solver parameters.
             record_history: if True, keep the full V trajectory.
+            divergence_threshold: abort if |V| exceeds this (or goes
+                non-finite), reporting 'diverged': True. Explicit Euler is
+                only conditionally stable and blows up rather than relaxing
+                once dt is too large for the stiffness set by
+                beta * g_penalty - the practical boundary sits near
+                dt ~ 0.002 for beta=100, g_penalty=10, i.e. only ~2x above
+                the dt=0.001 used throughout the repo. Pass None to disable.
 
         Returns:
-            dict with 'V_final', 'converged', 'n_steps', and optionally
-            'V_history'.
+            dict with 'V_final', 'converged', 'diverged', 'n_steps', and
+            optionally 'V_history'. Note 'converged' False means either
+            "needed more steps" or "blew up" - check 'diverged' to tell
+            those apart.
         """
         V = V_init.copy()
         V[self.grid.clamped_nodes] = self.grid.clamped_values
@@ -84,7 +94,7 @@ class VoltageDynamics:
         # Early exit if every node is clamped - nothing to relax, and
         # np.max on the empty free_nodes selection below would raise.
         if len(free_nodes) == 0:
-            result = {'V_final': V, 'converged': True, 'n_steps': 0}
+            result = {'V_final': V, 'converged': True, 'diverged': False, 'n_steps': 0}
             if record_history:
                 result['V_history'] = np.array([V])
             return result
@@ -92,24 +102,35 @@ class VoltageDynamics:
         if record_history:
             V_history = [V.copy()]
 
-        for step in range(max_steps):
-            dV_dt = self._compute_time_derivative(V, penalty_pairs, beta, g_penalty)
+        def _finish(converged, diverged, n_steps):
+            result = {'V_final': V, 'converged': converged,
+                      'diverged': diverged, 'n_steps': n_steps}
+            if record_history:
+                result['V_history'] = np.array(V_history)
+            return result
 
-            V[free_nodes] += dt * dV_dt[free_nodes]
+        for step in range(max_steps):
+            with np.errstate(over='ignore', invalid='ignore'):
+                dV_dt = self._compute_time_derivative(V, penalty_pairs, beta, g_penalty)
+                V[free_nodes] += dt * dV_dt[free_nodes]
+                max_change = np.max(np.abs(dt * dV_dt[free_nodes]))
 
             if record_history:
                 V_history.append(V.copy())
 
-            if np.max(np.abs(dt * dV_dt[free_nodes])) < tol:
-                result = {'V_final': V, 'converged': True, 'n_steps': step + 1}
-                if record_history:
-                    result['V_history'] = np.array(V_history)
-                return result
+            # Divergence guard. Without it an unstable run is silent: V just
+            # fills with inf/nan and the caller sees converged=False, which
+            # is indistinguishable from "needed more steps". That matters
+            # most exactly when someone is sweeping beta/g_penalty/dt.
+            if divergence_threshold is not None:
+                if (not np.isfinite(max_change)
+                        or np.max(np.abs(V[free_nodes])) > divergence_threshold):
+                    return _finish(False, True, step + 1)
 
-        result = {'V_final': V, 'converged': False, 'n_steps': max_steps}
-        if record_history:
-            result['V_history'] = np.array(V_history)
-        return result
+            if max_change < tol:
+                return _finish(True, False, step + 1)
+
+        return _finish(False, False, max_steps)
 
     def _compute_time_derivative(self, V, penalty_pairs, beta, g_penalty):
         dV_dt = np.zeros(self.n_nodes)

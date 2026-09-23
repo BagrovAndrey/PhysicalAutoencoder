@@ -75,7 +75,8 @@ MeroCircuit/
 │   ├── test_network_visualization.py  # Visualization tests
 │   ├── test_plasticity_simple.py      # 3-node chain, explicit contrastive rule
 │   ├── test_plasticity.py             # 4->3->4 autoencoder, explicit contrastive rule
-│   └── test_with_memristors.py        # Grid+Memristor+Trainer smoke test
+│   ├── test_with_memristors.py        # Grid+Memristor+Trainer smoke test
+│   └── test_smoke_sweep.py            # Whole-simulator sanity sweep (48 checks, ~90s)
 └── DEVELOPMENT.md          # Why things look the way they do, and what's still open
 ```
 
@@ -245,15 +246,22 @@ anim = animate_relaxation(
 ```
 
 ## Running Tests
+
+Most test files are plain scripts, not pytest files - run them directly:
 ```bash
-# All tests
-pytest tests/ -v
+python3 tests/test_smoke_sweep.py       # start here: 48-check sanity sweep, ~90s
+python3 tests/test_dynamics_basic.py
+python3 tests/test_plasticity.py        # 4->3->4 learning run, ~80s
+```
 
-# Specific test file
-pytest tests/test_dynamics_autoencoder.py -v
+`test_smoke_sweep.py` is the one to run after any change to the solver, the memristor
+model, or a plasticity rule. It checks physics invariants (Kirchhoff, analytic agreement,
+linearity), that the physical knobs move things the right way, that both plasticity paths
+stay bounded, that runs are reproducible, and that the dataset loop works end to end.
 
-# With coverage
-pytest tests/ --cov=network --cov=datasets --cov=visualization
+`test_bars_stripes.py` is a real pytest file and needs `pytest` installed:
+```bash
+pytest tests/test_bars_stripes.py -v
 ```
 
 ## Key Parameters
@@ -262,11 +270,19 @@ pytest tests/ --cov=network --cov=datasets --cov=visualization
 - `dt`: Time step (0.001 for stable clamped phase with high β)
 - `tol`: Convergence tolerance (1e-10 for high precision)
 - `max_steps`: Maximum iterations per phase
+- `divergence_threshold`: Abort and report `result['diverged']` if |V| exceeds this
+  (default 1e6; `None` disables)
+
+> **Stability warning.** The solver is explicit Euler, which is only conditionally
+> stable. At `beta=100, g_penalty=10` the critical time step is **≈0.002**, so the
+> default `dt=0.001` has only about a **2x margin**. If you raise `beta` or
+> `g_penalty`, lower `dt` to match, and check `result['diverged']` — see
+> DEVELOPMENT.md ("Stability boundary, quantified") for the measured map.
 
 ### Physical Parameters
 - `beta`: Penalty coupling strength (0 = free, >0 = clamped)
 - `g_penalty`: Penalty link conductance
-- `capacitances`: Node capacitances (affects relaxation speed)
+- `capacitances`: Node capacitances (affects relaxation speed, not the fixed point)
 
 ### Experimental Protocol
 - `exposure_time_free`: Duration of free phase

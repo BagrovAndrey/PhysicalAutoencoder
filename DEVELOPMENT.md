@@ -4,7 +4,7 @@ Working document for restoring context between sessions. README.md describes
 *what* the code does; this file describes *why* it looks the way it does and
 what is currently broken.
 
-Last updated: 2026-09-14
+Last updated: 2026-09-23
 
 ---
 
@@ -63,6 +63,70 @@ actually verified to run now.
 - `tests/test_plasticity_simple.py` (3-node chain, target V[1]=0.68): **passes**, converges to target (95% error reduction over 50 cycles) - numerically identical behaviour to before the merge broke it.
 - `tests/test_plasticity.py`, 4→3→4 on pattern [1,0,1,0], quadratic `Q`: MSE 0.247 → 0.050 over 40 cycles (reduced from the historical 300-cycle run for test runtime - see the note in the file). This reproduces the historical plateau trajectory exactly (same numbers to 4 significant figures as the pre-merge run at matching cycle counts): output settles toward `[~0.73, ~0.13, ~0.73, ~0.13]` instead of `[1,0,1,0]`. **Still open, see below.**
 - `tests/test_with_memristors.py`: new smoke test (Grid + Memristor + Trainer, `global_threshold_rule`). Verifies the machinery runs, stays numerically finite, and moves weights - not a quality benchmark (short exposure times for test speed; see its docstring). A quick informal run of the *same rule* (fast vectorized prototype, not through Trainer's per-object loop) on the 4→3→4/[1,0,1,0] case, run long enough (~70 cycles of 10s exposure), reached MSE≈0.041 - comparable to the explicit-contrast plateau, after an initial ~35-cycle collapse-then-recovery transient. Worth re-checking through the real `Trainer` once someone has time for a multi-minute run.
+
+### Smoke sweep (2026-09-23): `tests/test_smoke_sweep.py`
+
+A harness that asks whether the thing works *as a simulator* — can you build different
+shapes, swap I-V curves and plasticity rules, turn the physical knobs, and get finite,
+reproducible answers that move the way physics says they should. 48 checks, ~90s, all
+passing. It says nothing about whether the plateau is solved; it is the regression net
+that should catch the next silent breakage the way nobody caught the merge one.
+
+What it establishes:
+
+- **Physics invariants hold.** Boundary conditions are pinned exactly; Kirchhoff residual
+  at converged free nodes is ~1e-10; the relaxed solution matches an independent direct
+  Laplacian solve to ~1e-10 for the ohmic case; the ohmic network is linear; the fixed
+  point is independent of capacitance while relaxation time scales with it.
+- **The knobs do what they should.** Increasing `beta` (0 → 1 → 10 → 100) drives
+  reconstruction MSE monotonically 0.249 → 0.0053 → 7e-5 → 0; `g_penalty` does the same;
+  `dt` changes cost but not the fixed point; all four I-V characteristics relax to finite
+  fixed points. Note `diode_iv` saturates every output to 1.0 — correct rectifying
+  behaviour, but it means the diode curve is not usable as-is for autoencoding.
+- **Both plasticity paths stay bounded** across `eta`/`gamma`/`tau_theta` sweeps, and the
+  rule really is a one-line swap: a custom rule passed as `plast_func` changes behaviour
+  with no other edit. Per-edge `theta` is reachable today (two edges can hold different
+  values and produce different `dw/dt`), confirming the future-extension point is real
+  rather than decorative.
+- **Runs are bit-reproducible** for a fixed seed, and different seeds give different
+  networks.
+- **The dataset path works end to end.** `Trainer` driven over all 6 Bars & Stripes N=2
+  patterns for 3 epochs stays finite, and distinct inputs do produce distinct outputs
+  (max per-node spread ≈0.06) — small, but not the fully collapsed state. This closes the
+  mechanical half of Open Problem #4; what remains there is quality, not wiring.
+
+### Stability boundary, quantified (2026-09-23)
+
+Open Problem #2 used to say "explicit Euler is stiff, lower `dt` if you raise `beta`".
+The boundary has now been measured, and it is tighter than that wording suggests. At the
+repo's standard `beta=100, g_penalty=10`, critical `dt` is **≈0.0020** — the `dt=0.001`
+used everywhere has only about a **2x margin**, not the order of magnitude one would want.
+Map (relu, `g_penalty=10`):
+
+| `dt` | β=1 | β=10 | β=100 | β=1000 |
+|------|-----|------|-------|--------|
+| 0.001 | ok | ok | ok | diverges |
+| 0.005 | ok | ok | diverges | diverges |
+| 0.01 | ok | ok | diverges | diverges |
+| 0.05 | ok | diverges | diverges | diverges |
+
+Practical consequence: **anyone sweeping `beta`, `g_penalty` or `dt` will cross this
+boundary.** Previously that failure was silent — `V` filled with inf/nan and the caller
+got `converged=False`, indistinguishable from "needed more steps". `relax_transient` now
+takes `divergence_threshold` (default 1e6) and returns a `'diverged'` flag; pass
+`divergence_threshold=None` for the old raw behaviour. This changes no physics: the full
+suite, including `test_plasticity.py`, reproduces identical numbers (final MSE 0.050202).
+
+### Cost at the target scale (2026-09-23)
+
+Per-step solver cost measured at fixed step budget: 4→3→4 (11 nodes) ≈39 µs, 9→4→9 (22)
+≈89 µs, 16→8→16 (40) ≈258 µs — consistent with the O(n²) dense node-pair loop in
+`_compute_time_derivative`. Extrapolating to the proposal's **64→8→64 (136 nodes): ~3 ms
+per step, ~60 s per free+clamped cycle at 10k steps/phase, so a 300-cycle run is ~5 hours**
+of pure Python. That is the real obstacle to working at target scale, and it is not a
+physics problem: the inner double loop over `range(n)` is vectorizable into a couple of
+dense matrix ops, which should buy one to two orders of magnitude. Worth doing before,
+not after, the next round of physics experiments.
 
 ### Correction to the "Design Decisions" section below (found 2026-09-14)
 
@@ -279,6 +343,13 @@ Explicit Euler with strong penalty is stiff. If larger `beta` is needed, either 
 or switch the integrator (`_compute_time_derivative` is separated from the integration
 scheme for exactly this reason — RK4 or `scipy.integrate` is a drop-in).
 
+**Measured 2026-09-23** (see "Stability boundary, quantified" above): critical `dt` ≈0.0020
+at `beta=100, g_penalty=10`, so the default `dt=0.001` has only ~2x margin. Divergence is
+now detected and reported (`result['diverged']`) instead of silently producing inf/nan,
+but the underlying stiffness is unaddressed — switching integrator is still the real fix,
+and it becomes more attractive now that the cost extrapolation (above) argues for
+vectorizing that same inner loop anyway.
+
 ### 3. `test_plasticity.py` is messy
 
 It has accumulated a lot of inline diagnostics (EMA vs. manual Q, dw ranges, weight stats,
@@ -286,13 +357,25 @@ convergence flags, adaptive beta remnants). It was ported to Grid/Memristor as-i
 (2026-09-14) to keep the fix minimal and reviewable; the cleanup below is still
 pending.
 
-### 4. `training/trainer.py` is not wired to the Bars & Stripes dataset yet
+### 4. `training/trainer.py` and the Bars & Stripes dataset
 
-It runs the free/clamped protocol for a single pattern (`run_cycle(pattern)`);
-looping it over `datasets.bars_stripes.BarsAndStripes` patterns is straightforward
-but not done. Also not yet load-tested at the target ~64→8→64 scale - the
-per-edge `Memristor` object overhead (see Test results) will matter more there
-than it does at 4→3→4.
+It runs the free/clamped protocol for a single pattern (`run_cycle(pattern)`).
+**Updated 2026-09-23:** looping it over `datasets.bars_stripes.BarsAndStripes` is now
+demonstrated to work (`test_smoke_sweep.py`, section 4e: all 6 N=2 patterns, 3 epochs,
+~180 ms/cycle, stays finite, distinct inputs give distinct outputs). So the wiring is no
+longer the open part — *quality* is: mean MSE sits near 0.46–0.50 and does not improve
+across epochs, and the per-output spread between different patterns is only ~0.06, i.e.
+the network is barely discriminating between inputs. Whether that is the same
+underlying problem as the 4→3→4 plateau (#1) or a separate multi-pattern interference
+issue is untested. A convenience `Trainer.run_epoch(patterns)` would also be worth adding
+so every caller stops writing the same loop.
+
+### 5. Scale: ~5 hours per 300-cycle run at 64→8→64
+
+Measured 2026-09-23, see "Cost at the target scale" above. `_compute_time_derivative`
+loops over all node pairs in Python; vectorizing it into dense matrix ops is the single
+highest-leverage change in the codebase right now, and blocks doing physics at the
+proposal's target size.
 
 ---
 
@@ -317,14 +400,25 @@ than it does at 4→3→4.
 
 ## Next Steps (rough order)
 
+*Reordered 2026-09-23 after the smoke sweep.* Vectorizing the solver moved to the top:
+every remaining physics question needs long runs, and right now a 300-cycle run at target
+scale costs ~5 hours. Making experiments cheap comes before running more of them.
+
+0. **Vectorize `_compute_time_derivative`** (Open Problems #5). Replace the Python
+   double loop over node pairs with dense matrix ops. Expect 1–2 orders of magnitude;
+   `test_smoke_sweep.py` + `test_plasticity.py` (which reproduces exact numbers) together
+   make this safe to do as a pure refactor with a numerical check at the end.
 1. Run the global-theta local rule through the real `Trainer` for a full-length
    (multi-minute) run and see whether it actually breaks past the ~0.04 MSE ceiling,
-   or lands there too (see Open Problems #1).
+   or lands there too (see Open Problems #1). Much cheaper after step 0.
 2. Derive the EP gradient correspondence properly for this rule (the missing `1/beta`
    normalization question) instead of continuing to hand-tune around the plateau.
 3. Try momentum on `dw` as a cheaper thing to test first.
 4. Clean up `test_plasticity.py` (Open Problems #3).
-5. Wire `training/trainer.py` to the full 4×4 Bars & Stripes dataset (Open Problems #4).
+5. Investigate multi-pattern quality on Bars & Stripes - the loop now runs, but the
+   network barely discriminates between patterns (Open Problems #4). Add
+   `Trainer.run_epoch(patterns)` while in there.
 6. Training visualization (MSE vs. cycle, weight evolution, reconstruction animation).
 7. Load-test at (or scale down gracefully toward) the target ~64→8→64 architecture -
-   per-edge Memristor object overhead has not been checked at that size.
+   cost is now measured (~3 ms/step, ~60 s/cycle; see "Cost at the target scale"), but
+   nothing has actually been *trained* at that size.

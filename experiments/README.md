@@ -1,32 +1,31 @@
 # experiments/
 
-Informal, one-off exploration scripts - **not** part of the maintained test
-suite (see `../tests/` for that, and `../DEVELOPMENT.md` for current
-pass/fail status). They exist to record the empirical basis for design
-decisions written up in `DEVELOPMENT.md`, in particular the "Correction to
-the 'Design Decisions' section" and "Global vs local theta" sections.
+Exploration scripts - **not** part of the maintained test suite (see `../tests/`). They
+record the empirical basis for claims in `../DEVELOPMENT.md` and `../docs/SPEC.md`. New
+studies go in dated subfolders, `<YYYY-MM-DD>_<topic>/`, each with its own README and
+results JSON (see `../AGENTS.md`).
 
-All three were written and run against `network/dynamics.py`'s **old**
-array/`iv_function` API, before the 2026-09-14 fix that made it
-Grid/Memristor-based (see `DEVELOPMENT.md`, "History: the broken merge").
-They are kept as-is, unrun since the fix, as a record of the exact numbers
-now cited in `DEVELOPMENT.md`. To run one again, either check out the old
-`network/dynamics.py` from git history (commit `d456d0f`), or port its
-solver setup to `Grid` + `network.builders.build_memristor_array`, the same
-way `tests/test_plasticity.py` was ported.
+## `2026-09-24_diagnostics/` — current
 
-- `plateau_baseline.py` - reproduces the 4→3→4 plateau with the explicit
-  contrastive rule (quadratic Q), and checks whether switching to a literal
-  linear Q (as an earlier draft of DEVELOPMENT.md claimed) helps. It doesn't
-  - it makes the reconstruction worse.
-- `online_rule_check.py` - tests a fully local, clock-free online rule
-  driven by raw `Q_avg` with no reference value. Every weight collapses to
-  `g_min` - a sign-definite quadratic observable can only ever push weights
-  one way, so a two-sided (potentiate/depress) signal needs *something* to
-  compare against.
-- `bcm_threshold_check.py` - tests a BCM-style fix: a per-edge, purely
-  local, slowly-adapting theta. It works (recovers to MSE ≈ 0.041), but
-  the project went with a single *global* theta instead (see
-  `DEVELOPMENT.md`, "Global vs local theta") - this script is kept as the
-  record of why the local-per-edge alternative was considered and what it
-  would take to revisit it later.
+Why learning stalls: the transport-threshold floor, the nudge-strength regime of the
+learning rule, the representational ceiling of passive symmetric networks, and rectifying
+memristor pairs. Self-contained (own fast solver, cross-checked against
+`network/dynamics.py` to ~1e-9) and runnable as is. Backs `docs/SPEC.md` §3.
+
+## Top-level scripts (2026-09-14) — historical
+
+Written and run against `network/dynamics.py`'s **old** array/`iv_function` API, before
+the 2026-09-14 fix that made it Grid/Memristor-based (see `DEVELOPMENT.md`, "History: the
+broken merge"). Kept as-is, unrun since the fix, as the record of the numbers cited in
+`DEVELOPMENT.md`. To run one again, check out the old `network/dynamics.py` (commit
+`d456d0f`) or port its solver setup to `Grid` + `network.builders.build_memristor_array`.
+
+- `plateau_baseline.py` - reproduces the 4→3→4 plateau with the explicit contrastive rule
+  (quadratic Q) and checks whether a literal linear Q (as an earlier draft of
+  DEVELOPMENT.md claimed) helps. It doesn't — reconstruction gets worse.
+- `online_rule_check.py` - a fully local, clock-free online rule driven by raw `Q_avg` with
+  no reference value. Every weight collapses to `g_min`: a sign-definite observable can only
+  push weights one way, so a two-sided signal needs something to compare against.
+- `bcm_threshold_check.py` - the BCM-style fix: a per-edge, slowly adapting theta. Recovers
+  to MSE ≈ 0.041; the project chose a single *global* theta instead (DEVELOPMENT.md,
+  "Global vs local theta").

@@ -4,7 +4,34 @@ Working document for restoring context between sessions. README.md describes
 *what* the code does; this file describes *why* it looks the way it does and
 what is currently broken.
 
-Last updated: 2026-09-23
+Last updated: 2026-09-24
+
+---
+
+## 2026-09-24: diagnosis of the plateau and of dataset learning → `docs/SPEC.md`
+
+The current picture, with numbers and the plan, lives in [`docs/SPEC.md`](docs/SPEC.md)
+(§3 diagnosis, §4 work packages, §5 decisions for the team). Scripts and results:
+`experiments/2026-09-24_diagnostics/`. In one paragraph:
+
+- **The single-pattern plateau is the transport threshold, not the learning rule.** With
+  the dead-zone ReLU each hop costs `V_th`; a hand-wired *ideal* 4-2-4 network gives
+  `[0.8, 0.2, 0.8, 0.2]`, MSE 0.040 = (2·V_th)² at V_th = 0.1. Open Problem #1 below
+  ("vanishing gradient?") is largely explained by this.
+- **The learning rule runs far from the EP regime.** At β·g_p = 1000 the contrastive
+  estimate is only ~0.33 cosine-aligned with the true gradient; at 0.1 it is 0.97. Weak-nudge
+  EP with the element's co-content as observable reaches the representational ceiling on
+  2×2 Bars & Stripes; the repo rule stalls at twice that. The sign in the code (`−η`) is the
+  EP one; eq. (14) of the proposal has `+η`.
+- **Passive networks of symmetric elements cannot represent Bars & Stripes** beyond 2×2
+  (best achievable 3×3 exact reconstruction 14–43%); bias nodes and complementary inputs
+  do not help; 64→8→64 is below the linear rank (15) of 8×8 B&S.
+- **Rectifying antiparallel memristor pairs can** (hand-built 3×3 network: 14/14 exact at
+  realistic leakage), and a local weak-nudge EP rule learns on them better than anything
+  else tried (3×3: 57–64% exact) — but does not find the perfect basin from random
+  initialization. Trainability is now the main open question.
+
+Open Problems and Next Steps below predate this entry; where they disagree, the SPEC wins.
 
 ---
 
@@ -475,6 +502,10 @@ proposal's target size.
 ---
 
 ## Next Steps (rough order)
+
+**Superseded 2026-09-24 by the work packages in [`docs/SPEC.md`](docs/SPEC.md) §4**
+(WP0 fast solver, WP1 evaluation harness, WP2 EP-consistent rule, WP3 rectifying pairs,
+WP4 trainability, …). The list below is kept for history.
 
 *Reordered 2026-09-23 after the smoke sweep.* Vectorizing the solver moved to the top:
 every remaining physics question needs long runs, and right now a 300-cycle run at target

@@ -1,357 +1,274 @@
 # MeroCircuit
 
-Neuromorphic autoencoder implementation using memristive networks and equilibrium propagation principles.
+Simulation of a neuromorphic autoencoder built from memristive networks and trained by
+equilibrium-propagation-style local learning: inference is electrical relaxation, learning
+is slow local adaptation of conductances driven by the difference between a free and a
+weakly clamped regime. See the project proposal (*Fully autonomous neuromorphic element
+based on autoencoder learning principles*) for the physical framework.
 
-## Project Overview
+## Status at a glance
 
-This project implements a theoretical framework for autonomous learning in physical memristive networks. The system uses equilibrium propagation: learning occurs through local adaptation driven by differences in electrical activity between free and clamped phases, without requiring external backpropagation.
-
-### Key Features
-
-- **Voltage dynamics solver**: Transient relaxation of voltages in resistive/memristive networks
-- **Autoencoder topology**: Input → Hidden → Output architecture with penalty coupling
-- **Multiple I-V characteristics**: Ohmic, ReLU, sigmoid, and diode models
-- **Comprehensive visualization**: Network states, current flows, and animated relaxation dynamics
-- **Experimental protocol**: Realistic simulation with fixed exposure times per phase
+- **Works:** the solver, both plasticity paths, the CLI, and a 64-check regression suite.
+  A 4→3→4 network learns a single pattern `[1,0,1,0]` to MSE ≈ 0.03–0.05; thresholded at
+  0.5, the reconstruction is bit-perfect.
+- **Does not work yet:** learning a *dataset*. On 2×2 Bars & Stripes the current rules do
+  not reach the best achievable reconstruction, and for the symmetric I-V curves in the
+  repo even the best achievable reconstruction of 3×3 Bars & Stripes is poor.
+- **Why, and what to try next:** [`docs/SPEC.md`](docs/SPEC.md) — measured diagnosis
+  (threshold loss per hop, nudge-strength regime of the learning rule, representational
+  limits of passive symmetric networks) and a prioritized experiment plan.
+  [`DEVELOPMENT.md`](DEVELOPMENT.md) has the history and design decisions.
 
 ## Installation
 
-### Requirements
+Requires Python ≥ 3.9.
 
-- Python ≥ 3.9
-- pip and venv
-
-### Setup
-
-1. **Clone the repository:**
 ```bash
-   git clone https://github.com/VladimirBash/MeroCircuit
-   cd MeroCircuit
+git clone https://github.com/VladimirBash/MeroCircuit
+cd MeroCircuit
+python3 -m venv venv
+source venv/bin/activate          # Windows: venv\Scripts\activate
+pip install --upgrade pip
+pip install -r requirements.txt
+pip install -e .
+python3 tests/test_smoke_sweep.py  # ~3 min, should end with "64 passed, 0 failed"
 ```
 
-2. **Create and activate virtual environment:**
-```bash
-   python3 -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
+## Quick start: the `sim.py` CLI
 
-3. **Install dependencies:**
-```bash
-   pip install --upgrade pip
-   pip install -r requirements.txt
-   pip install -e .
-```
-
-4. **Check it works:**
-```bash
-   python3 tests/test_smoke_sweep.py
-```
-
-## Quick Start: the `sim.py` CLI
-
-The fastest way to get a feel for the model is to turn its knobs from the command
-line. Everything the test files hardcode is exposed as a flag.
+The fastest way to get a feel for the model is to turn its knobs from the command line.
+Every subcommand takes `--help`.
 
 ```bash
-python3 sim.py info                  # what's available and how the default net is wired
-python3 sim.py relax --beta 0        # one free-phase relaxation: voltages, currents, MSE
-python3 sim.py train                 # a 4->3->4 learning run (reproduces the docs' numbers)
+python3 sim.py info                  # available I-V curves, observables, rules; default wiring
+python3 sim.py relax --beta 0        # one free-phase relaxation: voltages, residual, MSE
+python3 sim.py train                 # 4->3->4 on [1,0,1,0], contrastive rule, 40 cycles
 python3 sim.py sweep --param beta --values 0,1,10,100
-python3 sim.py stability             # where explicit Euler blows up
+python3 sim.py stability             # where the explicit Euler solver blows up
 python3 sim.py bench                 # solver cost vs network size
 ```
 
-Every subcommand takes `--help`. Some things worth trying:
+Things worth trying:
 
 ```bash
 # Watch the penalty coupling pull the output toward the input
 python3 sim.py sweep --param beta --values 0,0.1,1,10,100 --max-steps 30000
 
-# Compare the two plasticity paths on the same problem (both reach ~0.03-0.05)
+# The two plasticity paths on the same problem (both end around MSE 0.03-0.05)
 python3 sim.py train --rule contrastive  --cycles 40
 python3 sim.py train --rule global-theta --cycles 25
 
-# See what a fully-relaxed free phase does (the default protocol truncates it)
+# Fully relaxed free phase instead of the fixed-exposure protocol
 python3 sim.py train --rule global-theta --cycles 25 --relax-max-steps 100000
 
-# Does the learning rate matter, or is it degenerate with beta? (see DEVELOPMENT.md)
-python3 sim.py sweep --param eta --values 0.1,0.3,1.05,3.0 --train --cycles 20
-
-# Swap the local observable - quadratic is the default, linear is what the
-# design notes long (incorrectly) claimed was in use
-python3 sim.py train --observable linear --cycles 20
-
-# Different I-V characteristic, bigger bottleneck, a real dataset
+# Other I-V curve / bigger bottleneck / the real dataset
 python3 sim.py train --iv sigmoid --n-hidden 6 --cycles 20
 python3 sim.py train --dataset bars-stripes --n-input 4 --cycles 30
+
+# Save the learning curve
+python3 sim.py train --cycles 40 --plot mse.png
 
 # Break it on purpose: dt past the stability boundary
 python3 sim.py relax --dt 0.05 --beta 100
 ```
 
-> Heads-up: a "not converged" relaxation is usually **not** an error — relaxing for a
-> fixed exposure time is the intended physical protocol. A `DIVERGED` result is a real
-> failure; lower `--dt`. See the stability warning under Key Parameters.
+> **"not converged" is usually not an error.** Relaxing for a fixed exposure time is the
+> intended protocol, and the free phase typically does not fully settle within it.
+> `DIVERGED` is a real failure: lower `--dt` (see *Key parameters*).
 
-> **If you change `--micro-steps` or `--exposure`, leave `--window-pts` alone.** The
-> memristor's averaging window has to span exactly one phase or the network silently
-> stops learning (it keeps running and stays finite — it just never improves). `sim.py`
-> ties them together by default and `Trainer` warns if they drift apart. The reasoning,
-> and the measured table, are in DEVELOPMENT.md under "The window must span one phase".
+> **Leave `--window-pts` alone when changing `--micro-steps` or `--exposure`.** The
+> memristor's averaging window must span exactly one phase, otherwise the network stops
+> learning while still running and staying finite. `sim.py` ties the two together by
+> default and `Trainer` warns if they drift apart. Details: DEVELOPMENT.md, "The window
+> must span one phase".
 
-## Project Structure
+## Project structure
+
 ```
 MeroCircuit/
-├── sim.py                   # CLI: relax / train / sweep / stability / bench / info
-├── network/                 # Voltage dynamics and I-V characteristics
-│   ├── dynamics.py         # VoltageDynamics solver (Euler method), Grid/Memristor-based
-│   ├── builders.py         # Glue: (adjacency, weights, iv_func) <-> Grid + Memristor array
-│   ├── iv_characteristics.py  # Ohmic, ReLU, sigmoid, diode I-V curves
-│   └── legacy.py           # Volodya's original R_Network (preserved, unrelated solver)
+├── sim.py                    # CLI: relax / train / sweep / stability / bench / info
+├── AGENTS.md                 # Working rules for coding agents (Codex etc.)
+├── DEVELOPMENT.md            # History, design decisions, measured findings
+├── docs/
+│   └── SPEC.md               # Current diagnosis + prioritized research/engineering plan
 ├── grid/
-│   └── grid.py             # Grid: topology + boundary conditions
+│   └── grid.py               # Grid: topology, clamped nodes/values, capacitances
 ├── memristor/
-│   └── memristor.py        # Memristor: per-edge state, local Q integrator, plasticity hook
-├── datasets/               # Bars & Stripes pattern generation
-│   ├── bars_stripes.py    # BarsAndStripes class
-│   └── generate.py        # Dataset generation script
-├── visualization/          # Plotting and animation tools
-│   ├── plotting.py        # Static plots for patterns
-│   └── dynamics_viz.py    # Network graphs, current flows, animations
+│   └── memristor.py          # Memristor: state w, windowed local observable, plasticity hook
+├── network/
+│   ├── dynamics.py           # VoltageDynamics: explicit-Euler relaxation, penalty coupling
+│   ├── builders.py           # build_autoencoder_topology, Memristor-array builders,
+│   │                         #   extract_weights / set_weights
+│   ├── iv_characteristics.py # ohmic, relu (dead zone), sigmoid, diode
+│   └── legacy.py             # original R_Network solver (kept, not used)
 ├── training/
-│   ├── plasticity.py      # SimplePlasticity: explicit two-snapshot contrastive rule
-│   ├── rules.py            # plast_func rules + local observables (Q = dV^2, dV, dV*I)
-│   └── trainer.py          # Trainer: free/clamped cycle + the shared theta
-├── tests/                  # Test suite (see DEVELOPMENT.md for current pass/fail status)
-│   ├── test_dynamics_basic.py         # Simple circuits (chains, dividers)
-│   ├── test_dynamics_autoencoder.py   # Autoencoder topology tests
-│   ├── test_network_visualization.py  # Visualization tests
-│   ├── test_plasticity_simple.py      # 3-node chain, explicit contrastive rule
-│   ├── test_plasticity.py             # 4->3->4 autoencoder, explicit contrastive rule
-│   ├── test_with_memristors.py        # Grid+Memristor+Trainer smoke test
-│   └── test_smoke_sweep.py            # Whole-simulator sanity sweep (48 checks, ~90s)
-└── DEVELOPMENT.md          # Why things look the way they do, and what's still open
+│   ├── plasticity.py         # SimplePlasticity: explicit two-snapshot contrastive rule
+│   ├── rules.py              # plast_func rules + local observables (dV^2, dV, dV*I)
+│   └── trainer.py            # Trainer: free/clamped cycle, shared theta, online path
+├── datasets/
+│   ├── bars_stripes.py       # BarsAndStripes: N×N patterns, encoding, splits
+│   └── generate.py
+├── visualization/
+│   ├── plotting.py           # pattern plots
+│   └── dynamics_viz.py       # voltage evolution, network states, animations
+├── experiments/              # informal scripts behind claims in DEVELOPMENT.md
+│                             #   (written against the pre-fix solver API - see its README)
+└── tests/
+    ├── test_smoke_sweep.py           # start here: 64 checks, ~3 min
+    ├── test_dynamics_basic.py        # chains, dividers, penalty coupling
+    ├── test_dynamics_autoencoder.py  # autoencoder topology, exposure protocol
+    ├── test_iv_characteristics.py    # I-V curves
+    ├── test_plasticity_simple.py     # 3-node chain, contrastive rule
+    ├── test_plasticity.py            # 4->3->4 on [1,0,1,0], contrastive rule (~80 s)
+    ├── test_with_memristors.py       # Grid + Memristor + Trainer
+    ├── test_network_visualization.py # plots and animation
+    ├── test_bars_stripes.py          # dataset (pytest)
+    └── test_visualization.py         # pattern plots (needs an interactive matplotlib backend)
 ```
 
-## Current Implementation Status
+## What is implemented
 
-See `DEVELOPMENT.md` for the full, current picture (test results, open
-problems, and a note on a merge that briefly broke `main` - worth reading
-before assuming anything below is up to date).
+**Physics.** Nodes with capacitances relax by explicit Euler under Kirchhoff's current
+law; input nodes are clamped; a penalty link `β·g_p·(V_in − V_out)` couples each output to
+its input in the clamped phase. Each edge is a `Memristor` with state `w ∈ [0,1]`,
+conductance `g = g_min + (g_max − g_min)·w`, and a pluggable I-V curve (ohmic, thresholded
+ReLU with dead zone, sigmoid, diode). The solver detects divergence and reports it.
 
-### ✅ Completed
+**Learning — two paths on the same substrate.**
+- *Explicit contrastive* (`training/plasticity.py`): relax free and clamped, compute
+  `ΔQ = Q_clamped − Q_free` per edge from the two snapshots, update all weights at once:
+  `dw = −η·ΔQ·(1 − w) − γ·w`.
+- *Online* (`training/trainer.py`, `training/rules.py`): each memristor integrates its own
+  local observable over a window one phase long and compares it with one slowly adapting,
+  network-wide threshold θ; no phase label reaches any element.
 
-**Voltage Dynamics Solver** (`network/dynamics.py`)
-- Transient relaxation via explicit Euler method, on top of `Grid` (topology
-  + boundary conditions) and an array of `Memristor` objects (per-edge state)
-- Penalty coupling for autoencoder reconstruction
-- Configurable I-V characteristics per edge, and capacitances
-- Free phase (β=0) and clamped phase (β>0) support
+Note the sign: the code uses `−η` (the gradient-descent direction under equilibrium
+propagation), while eq. (14) of the proposal is written with `+η`. See `docs/SPEC.md`.
 
-**Grid & Memristor** (`grid/grid.py`, `memristor/memristor.py`)
-- `Grid`: adjacency, clamped nodes/values, capacitances
-- `Memristor`: local conductance state, a fast windowed average of a local
-  observable `Q`, and a pluggable plasticity rule (`plast_func`) - see
-  `training/rules.py` and DEVELOPMENT.md's "Global vs local theta"
+**Tooling.** `sim.py` CLI; Bars & Stripes generator; plotting and animation;
+`tests/test_smoke_sweep.py` covering physics invariants (Kirchhoff residual, agreement with a
+direct Laplacian solve, linearity), parameter responses, stability, that both plasticity
+paths actually reduce error, reproducibility, and the CLI.
 
-**I-V Characteristics** (`network/iv_characteristics.py`)
-- Ohmic (linear)
-- ReLU with threshold
-- Sigmoid (smooth nonlinearity)
-- Diode (asymmetric)
+## Usage from Python
 
-**Datasets** (`datasets/`)
-- Bars & Stripes pattern generator for N×N grids
-- Voltage encoding/decoding
-- Train/test splitting
-- Pattern type classification
+### Bars & Stripes
 
-**Visualization** (`visualization/`)
-- Time series plots of voltage evolution
-- Network graphs with voltage-coded nodes
-- Current flow visualization with arrows
-- Animated relaxation (free → clamped phase transition)
-- Side-by-side phase comparison
-
-**Testing**
-- Basic circuit tests (resistor chains, voltage dividers)
-- Autoencoder topology with realistic experimental protocol
-- Penalty coupling validation
-- Convergence tests with different capacitances
-- Plasticity: 3-node chain (converges) and 4→3→4 autoencoder (learns, then
-  plateaus - see DEVELOPMENT.md, Open Problems)
-- Grid+Memristor+Trainer smoke test (`test_with_memristors.py`)
-
-### 🚧 In Development
-
-**Plasticity Rules** (`training/`)
-- Explicit two-snapshot contrastive rule (`SimplePlasticity`) - works, plateaus
-- Local/online rule driven by a shared global threshold (`training/rules.py`) - new, only smoke-tested at length
-
-**Training Loop** (`training/trainer.py`)
-- Single-cycle, single-pattern free/clamped protocol - done
-- Multi-cycle, full-dataset loop over Bars & Stripes - not yet wired up
-- MSE tracking / weight evolution visualization - not started
-
-### 📋 Planned
-
-- Wire `Trainer` to the full 4×4 Bars & Stripes dataset
-- Resolve the 4→3→4 plateau (see DEVELOPMENT.md, Open Problems)
-- Load-test at the target ~64→8→64 scale
-
-## Usage Examples
-
-### Generate Bars & Stripes Dataset
 ```python
 from datasets.bars_stripes import BarsAndStripes
 
-# Create dataset
 ds = BarsAndStripes(N=4, voltage_on=1.0, voltage_off=0.0)
-
-# Get all patterns
-patterns = ds.get_all_patterns()  # Shape: (n_patterns, 4, 4)
-
-# Sample random batch
-batch = ds.sample(n_samples=8)
-
-# Split for training
-train_patterns, test_patterns = ds.split_train_test(test_fraction=0.2)
+patterns = ds.get_all_patterns()            # (n_patterns, 4, 4)
+flat = ds.get_all_flattened()               # (n_patterns, 16)
+train, test = ds.split_train_test(test_fraction=0.2)
 ```
 
-### Run Voltage Relaxation
+### One free and one clamped relaxation of a 4→3→4 autoencoder
+
 ```python
-from grid.grid import Grid
-from network.builders import build_static_memristor_array
-from network.dynamics import VoltageDynamics
-from network.iv_characteristics import ohmic
 import numpy as np
+from grid.grid import Grid
+from network.builders import build_autoencoder_topology, build_static_memristor_array
+from network.dynamics import VoltageDynamics
+from network.iv_characteristics import relu_iv
 
-# Simple 3-node chain: 0 -- 1 -- 2
-adjacency = np.array([[0, 1, 0], [1, 0, 1], [0, 1, 0]], dtype=bool)
-conductances = adjacency.astype(float)
+adjacency, w, inp, hid, out, pairs = build_autoencoder_topology(n_input=4, n_hidden=3, seed=42)
+pattern = np.array([1.0, 0.0, 1.0, 0.0])
+g = 0.01 + (1.0 - 0.01) * w                     # state w in [0,1] -> conductance
 
-grid = Grid(adjacency, clamped_nodes=np.array([0, 2]),
-            clamped_values=np.array([1.0, 0.0]), capacitances=1.0)
-memristors = build_static_memristor_array(adjacency, conductances, ohmic)
-solver = VoltageDynamics(grid, memristors)
+grid = Grid(adjacency, clamped_nodes=inp, clamped_values=pattern, capacitances=1.0)
+solver = VoltageDynamics(grid, build_static_memristor_array(adjacency, g, relu_iv))
 
-# Relax with boundary conditions (already set on the Grid above)
-V_init = np.array([1.0, 0.5, 0.0])
-result = solver.relax_transient(V_init, dt=0.01, max_steps=1000, record_history=True)
-
-print(f"Final voltages: {result['V_final']}")
-print(f"Converged: {result['converged']} in {result['n_steps']} steps")
+V0 = np.zeros(len(adjacency)); V0[inp] = pattern
+free = solver.relax_transient(V0, beta=0.0, dt=0.001, max_steps=10000, record_history=True)
+clamped = solver.relax_transient(free['V_final'], penalty_pairs=pairs, beta=100.0,
+                                 g_penalty=10.0, dt=0.001, max_steps=10000,
+                                 record_history=True)
+print("free output:   ", free['V_final'][out].round(3))
+print("clamped output:", clamped['V_final'][out].round(3))
 ```
 
-### Autoencoder with Penalty Coupling
-```python
-# Build 4→3→4 autoencoder
-n_input, n_hidden, n_output = 4, 3, 4
-n_total = n_input + n_hidden + n_output
+For a trainable network use `network.builders.build_memristor_array` (maps `w` through
+`g_min/g_max` and takes a real `plast_func`/`obs_func`) together with `training.Trainer`;
+`tests/test_with_memristors.py` and `sim.py` (`train_online`) are complete worked examples.
 
-# ... build adjacency, conductances, input_nodes, V_input ...
+### Plots and animation
 
-grid = Grid(adjacency, clamped_nodes=input_nodes, clamped_values=V_input, capacitances=1.0)
-memristors = build_static_memristor_array(adjacency, conductances, ohmic)
-solver = VoltageDynamics(grid, memristors)
-
-penalty_pairs = [(i, n_input + n_hidden + i) for i in range(n_input)]
-
-# Free phase (β=0)
-result_free = solver.relax_transient(V_init, beta=0.0, dt=0.001, max_steps=10000)
-
-# Clamped phase (β>0)
-result_clamped = solver.relax_transient(
-    result_free['V_final'],
-    penalty_pairs=penalty_pairs,
-    beta=1.0, g_penalty=1.0,
-    dt=0.001, max_steps=10000
-)
-```
-
-For a trainable (not just static) network, build the `Memristor` array with
-`network.builders.build_memristor_array` instead (it maps `w` through a
-`g_min`/`g_max` range and takes a real `plast_func`/`obs_func` - see
-`training/rules.py` and `training/trainer.py`, or `tests/test_with_memristors.py`
-for a complete worked example).
-
-### Visualize Network Dynamics
 ```python
 from visualization.dynamics_viz import plot_voltage_evolution, animate_relaxation
 
-# Plot voltage evolution
-fig = plot_voltage_evolution(
-    result['V_history'],
-    node_groups={'Input': [0, 3], 'Hidden': [1, 2]},
-    dt=0.01
-)
+fig = plot_voltage_evolution(free['V_history'],
+                             node_groups={'Input': list(inp), 'Hidden': list(hid),
+                                          'Output': list(out)},
+                             dt=0.001)
 fig.savefig('voltage_evolution.png')
 
-# Create animation (free → clamped) - animate_relaxation still takes a plain
-# conductance matrix + iv_function directly, independent of Grid/Memristor
-V_combined = np.vstack([result_free['V_history'], result_clamped['V_history']])
-anim = animate_relaxation(
-    V_combined, adjacency, conductances, ohmic,
-    nodes_to_plot=[0, 4, 8],  # Selected nodes
-    phase_transition_frame=len(result_free['V_history']),
-    output_file='relaxation.gif'
-)
+# animate_relaxation takes a plain conductance matrix + I-V function
+V_all = np.vstack([free['V_history'], clamped['V_history']])
+animate_relaxation(V_all, adjacency, g, relu_iv, nodes_to_plot=[0, 4, 8],
+                   phase_transition_frame=len(free['V_history']),
+                   output_file='relaxation.gif')
 ```
 
-## Running Tests
+## Running tests
 
-Most test files are plain scripts, not pytest files - run them directly:
+The test files are plain scripts (except `test_bars_stripes.py`):
+
 ```bash
-python3 tests/test_smoke_sweep.py       # start here: 48-check sanity sweep, ~90s
+python3 tests/test_smoke_sweep.py    # run after any change to solver, memristor or rules
+python3 tests/test_plasticity.py     # 4->3->4 learning run; final MSE must stay 0.050202
 python3 tests/test_dynamics_basic.py
-python3 tests/test_plasticity.py        # 4->3->4 learning run, ~80s
-```
-
-`test_smoke_sweep.py` is the one to run after any change to the solver, the memristor
-model, or a plasticity rule. It checks physics invariants (Kirchhoff, analytic agreement,
-linearity), that the physical knobs move things the right way, that both plasticity paths
-stay bounded, that runs are reproducible, and that the dataset loop works end to end.
-
-`test_bars_stripes.py` is a real pytest file and needs `pytest` installed:
-```bash
 pytest tests/test_bars_stripes.py -v
 ```
 
-## Key Parameters
+`test_plasticity.py` reproducing `Final MSE: 0.050202` exactly is the canary for any
+refactor that is supposed to leave the physics unchanged.
 
-### Solver Configuration
-- `dt`: Time step (0.001 for stable clamped phase with high β)
-- `tol`: Convergence tolerance (1e-10 for high precision)
-- `max_steps`: Maximum iterations per phase
-- `divergence_threshold`: Abort and report `result['diverged']` if |V| exceeds this
-  (default 1e6; `None` disables)
+## Key parameters
 
-> **Stability warning.** The solver is explicit Euler, which is only conditionally
-> stable. At `beta=100, g_penalty=10` the critical time step is **≈0.002**, so the
-> default `dt=0.001` has only about a **2x margin**. If you raise `beta` or
-> `g_penalty`, lower `dt` to match, and check `result['diverged']` — see
-> DEVELOPMENT.md ("Stability boundary, quantified") for the measured map.
+**Solver.** `dt` (0.001), `tol` (1e-10), `max_steps`, `divergence_threshold` (1e6; `None`
+disables).
 
-### Physical Parameters
-- `beta`: Penalty coupling strength (0 = free, >0 = clamped)
-- `g_penalty`: Penalty link conductance
-- `capacitances`: Node capacitances (affects relaxation speed, not the fixed point)
+> **Stability.** Explicit Euler is only conditionally stable. At `beta=100, g_penalty=10`
+> the critical time step is ≈ 0.002, so the default `dt=0.001` has only a 2× margin. Raise
+> `beta` or `g_penalty` → lower `dt`, and check `result['diverged']`.
 
-### Experimental Protocol
-- `exposure_time_free`: Duration of free phase
-- `exposure_time_clamped`: Duration of clamped phase
-- Both measured in seconds, independent of solver timestep
+**Physics.** `beta`, `g_penalty` (penalty strength is their product), `capacitances`
+(change relaxation speed, not the fixed point), `g_min`/`g_max` (0.01/1.0), and the I-V
+curve. For the thresholded ReLU the transport threshold `V_th = 0.1` costs up to `V_th` of
+signal per hop — see `docs/SPEC.md`.
+
+**Learning.** `eta`, `gamma`; contrastive path: `tau_integrate`, `dt_plasticity`; online
+path: `exposure` (10), `micro_steps` (200), `window_pts` (= `micro_steps`), `tau_theta`
+(40), `relax_max_steps` (defaults to `exposure/dt`). All times are in dimensionless model
+units.
 
 ## Team
 
-- **Andrey Bagrov**
-- **Anna Kravchenko**
-- **Vladimir Bashmakov**
-
-## License
-
-[To be determined]
+Andrey Bagrov, Anna Kravchenko, Vladimir Bashmakov
 
 ## References
 
-[Key papers and theoretical background to be added]
+- B. Scellier, Y. Bengio, *Equilibrium propagation: bridging the gap between energy-based
+  models and backpropagation*, Front. Comput. Neurosci. 11, 24 (2017).
+- J. Kendall et al., *Training end-to-end analog neural networks with equilibrium
+  propagation*, [arXiv:2006.01981](https://arxiv.org/abs/2006.01981) (2020).
+- M. Stern et al., *Supervised learning in physical networks: from machine learning to
+  learning machines*, [Phys. Rev. X 11, 021045](https://link.aps.org/doi/10.1103/PhysRevX.11.021045) (2021).
+- S. Dillavou et al., *Demonstration of decentralized physics-driven learning*,
+  [Phys. Rev. Applied 18, 014040](https://link.aps.org/doi/10.1103/PhysRevApplied.18.014040) (2022).
+- S. Dillavou et al., *Machine learning without a processor: emergent learning in a
+  nonlinear analog network*, [PNAS (2024)](https://www.pnas.org/doi/10.1073/pnas.2319718121).
+- A. Laborieux et al., *Scaling equilibrium propagation to deep ConvNets by drastically
+  reducing its gradient estimator bias*, [Front. Neurosci. (2021)](https://www.frontiersin.org/journals/neuroscience/articles/10.3389/fnins.2021.633674/full).
+- B. Scellier, S. Mishra, *A universal approximation theorem for nonlinear resistive
+  networks*, [Phys. Rev. Applied 23, 044009 (2025)](https://journals.aps.org/prapplied/abstract/10.1103/PhysRevApplied.23.044009).
+- V. R. Anisetti et al., *Frequency propagation: multimechanism learning in nonlinear
+  physical networks*, [Neural Computation 36(4) (2024)](https://direct.mit.edu/neco/article/36/4/596/119787/Frequency-Propagation-Multimechanism-Learning-in).
+- M. Guzman, S. Ciarella, A. J. Liu, *Unsupervised and probabilistic learning with
+  contrastive local learning networks: the Restricted Kirchhoff Machine*,
+  [arXiv:2509.15842](https://arxiv.org/abs/2509.15842).
+
+## License
+
+To be determined.

@@ -298,18 +298,45 @@ def cmd_train(args):
 
     print()
     print(f"  {args.cycles} cycles in {elapsed:.1f}s ({elapsed/args.cycles*1000:.0f} ms/cycle)")
-    change = (history[0] - history[-1]) / history[0] * 100
-    print(f"  MSE {history[0]:.6f} -> {history[-1]:.6f}"
-          f"   (improvement: {change:+.1f}%{'' if change >= 0 else '  <-- got worse'})")
-    print(f"  best MSE seen: {min(history):.6f} at cycle {int(np.argmin(history))+1}")
+
+    # With several patterns, consecutive cycles see DIFFERENT patterns, so
+    # "first cycle vs last cycle" compares unrelated things (and the first
+    # B&S pattern is all-zeros, whose MSE is exactly 0). Summarize per epoch.
+    P = len(patterns)
+    if P > 1:
+        n_full = len(history) // P
+        if n_full == 0:
+            print(f"  (fewer cycles than patterns - no complete epoch; use --cycles >= {P})")
+            curve = [float(np.mean(history))]
+        else:
+            curve = [float(np.mean(history[e * P:(e + 1) * P])) for e in range(n_full)]
+            if len(history) % P:
+                print(f"  (trailing partial epoch of {len(history) % P}/{P} patterns ignored "
+                      f"in the summary; use --cycles as a multiple of {P})")
+        unit = 'epoch'
+        if len(curve) <= 40:
+            print(f"  mean MSE per epoch: {[round(c, 4) for c in curve]}")
+    else:
+        curve, unit = history, 'cycle'
+    first, last = curve[0], curve[-1]
+    if first > 0:
+        change = (first - last) / first * 100
+        tail = f"(improvement: {change:+.1f}%{'' if change >= 0 else '  <-- got worse'})"
+    else:
+        tail = "(first value is 0, improvement undefined)"
+    label = "mean MSE" if P > 1 else "MSE"
+    print(f"  {label} {first:.6f} -> {last:.6f}   {tail}")
+    print(f"  best {label}: {min(curve):.6f} at {unit} {int(np.argmin(curve)) + 1}")
 
     if args.plot:
         import matplotlib
         matplotlib.use('Agg')
         import matplotlib.pyplot as plt
         fig, ax = plt.subplots(figsize=(7, 4))
-        ax.plot(np.arange(1, len(history) + 1), history, linewidth=2)
-        ax.set_xlabel('cycle'); ax.set_ylabel('reconstruction MSE (free phase)')
+        ax.plot(np.arange(1, len(curve) + 1), curve, linewidth=2)
+        ax.set_xlabel(unit)
+        ax.set_ylabel('reconstruction MSE (free phase)' if P == 1
+                      else 'mean reconstruction MSE over the dataset')
         ax.set_title(f"{args.n_input}-{args.n_hidden}-{args.n_input}, rule={args.rule}, "
                      f"eta={args.eta}, beta={args.beta}")
         ax.grid(alpha=0.3)

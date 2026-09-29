@@ -56,8 +56,10 @@ python3 play.py train --data bs3 --n-hidden 6 --epochs 200 --holdout 3 --show
 python3 play.py train --data bs2 --n-hidden 3 --element tanh --steepness 2 --epochs 40
 ```
 
-Elements: `rectpair` (antiparallel rectifying pair, optional `--vf`), `shockley`
-(handbuilt only), `ohmic`, `relu` (`--vth`), `tanh` (`--steepness`), `sinh` (`--v0`).
+Elements: `rectpair` (default; ideal antiparallel rectifying pair, optional `--vf`),
+`shockley` (each branch = Shockley diode in series with the filament; `--Is`, `--n`,
+`--vsig`), `ohmic`, `relu` (`--vth`), `tanh` (`--steepness`), `sinh` (`--v0`). All six
+work in `oracle` and `train`; `handbuilt` takes `rectpair` or `shockley`.
 Data: `bs2`…`bs5` or an explicit pattern such as `1,0,1,0`. `--holdout k` holds out k
 non-trivial patterns (never all-zeros/all-ones) as a test set.
 
@@ -71,6 +73,18 @@ Things found while building it (2026-09-29):
   signals most edges are saturated and the nudge cannot propagate through them. With
   `tanh(2 V)` the same rule reaches 100% (MSE 0.040 vs ceiling 0.038). The saturation
   scale must be comparable to the signal, the physical counterpart of vanishing gradients.
+- **Shockley branches need a much weaker nudge.** The EP observable of a branch is
+  `dPhi/dg = (I/g)^2/2`, half the squared voltage across its filament (derived and checked
+  against numerical integration; the oracle gradient passes a finite-difference check to
+  2e-8). But the one-sided EP estimate only aligns with the true gradient once the nudge
+  shifts node voltages by << kT/q: cosine -0.04 at beta*g_p = 1e-2 (60 mV shifts), 0.18
+  at 1e-3, 0.95 at 1e-4 (1 mV), 1.00 below. Symmetric nudging already gives 0.996 at 1e-3
+  (10 mV). Defaults in `play.py train --element shockley`: 1e-4, or 1e-3 with `--sym`.
+  The ideal pair only has curvature at its kink, which is why beta = 0.1 works there.
+  Open question: millivolt nudges are comparable to kT/C noise on femtofarad nodes.
+- **Local learning on Shockley pairs is slow and untuned.** 2x2, 1 V, `--sym --alpha 10`:
+  MSE 0.167 -> 0.126, 67% exact after 40 epochs (oracle ceiling 0.091, 100% exact with
+  zero margin). At 3 V it gets worse with the same settings. ~2 s per epoch.
 
 ## Conventions inside these scripts
 

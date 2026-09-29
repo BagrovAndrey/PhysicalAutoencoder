@@ -7,9 +7,17 @@ closed form via the Wright omega function  (W(e^x) = omega(x)):
 No hard threshold: near V=0 the branch is linear; strong rectification only for
 |V| >> n*V_T; reverse current saturates at -I_s whatever the filament state.
 Voltages in volts (V_T = 25.9 mV at 300 K); conductances in the model's units.
+
+Learning-relevant derivatives (at fixed branch voltage V):
+    dI/dg      = (I/g^2) * dI/dV
+    dPhi/dg    = (I/g)^2 / 2      Phi = co-content of the branch = I*V - content(I)
+The EP observable of a branch is therefore half the squared voltage across its
+FILAMENT (I/g), not across the whole element. For an ideal pair (no diode) it
+reduces to max(V,0)^2/2, as used in rectifying_pairs.py.
 """
 import numpy as np
 from scipy.special import wrightomega
+import rectifying_pairs as R
 from rectifying_pairs import make_net, handbuilt_w
 from symmetric_elements import bars_stripes
 
@@ -24,33 +32,85 @@ def branch(g, V, Is, n):
     return I, dIdV
 
 
-def solve(net, K, x, Is, n, steps=3000):
-    free = net['free']; V = np.zeros(net['n']); V[net['inp']] = x
-    def F_J(V):
-        D = V[None, :] - V[:, None]               # V_j - V_i
-        Kg = np.where(K > 0, K, 1.0)
-        I1, d1 = branch(Kg, D, Is, n)             # K[i,j]: conducts j -> i
-        I2, d2 = branch(Kg.T, -D, Is, n)          # K[j,i]: conducts i -> j
-        mask = (K > 0).astype(float)
-        F = (mask * I1).sum(1) - (mask.T * I2).sum(1)
-        W = mask * d1 + mask.T * d2
-        return F, W
-    dt = 0.9 / (2 * (K + K.T).sum(1).max())
+def branch_dg(g, V, Is, n):
+    I, dIdV = branch(g, V, Is, n)
+    return I / g ** 2 * dIdV
+
+
+def cocontent_dg(g, V, Is, n):
+    I, _ = branch(g, V, Is, n)
+    return 0.5 * (I / g) ** 2
+
+
+def F_J(net, K, V, Is, n, x=None, beta_gp=0.0):
+    D = V[None, :] - V[:, None]                   # V_j - V_i
+    Kg = np.where(K > 0, K, 1.0)
+    I1, d1 = branch(Kg, D, Is, n)                 # K[i,j]: conducts j -> i
+    I2, d2 = branch(Kg.T, -D, Is, n)              # K[j,i]: conducts i -> j
+    mask = (K > 0).astype(float)
+    F = (mask * I1).sum(1) - (mask.T * I2).sum(1)
+    W = mask * d1 + mask.T * d2
+    if beta_gp:
+        F[net['out']] += beta_gp * (x - V[net['out']])
+    return F, W
+
+
+def solve(net, K, x, Is, n, V0=None, beta_gp=0.0, steps=3000):
+    free, out = net['free'], net['out']
+    V = np.zeros(net['n']) if V0 is None else V0.copy()
+    V[net['inp']] = x
+    dt = 0.9 / (2 * (K + K.T).sum(1).max() + abs(beta_gp))
     for s in range(steps):
-        F, _ = F_J(V); V[free] += dt * F[free]
+        F, _ = F_J(net, K, V, Is, n, x, beta_gp); V[free] += dt * F[free]
         if s % 50 == 0 and np.abs(F[free]).max() < 1e-12: break
     for _ in range(100):
-        F, W = F_J(V); r = F[free]; nr = np.abs(r).max()
+        F, W = F_J(net, K, V, Is, n, x, beta_gp); r = F[free]; nr = np.abs(r).max()
         if nr < 1e-13: break
         J = W - np.diag(W.sum(1))
+        if beta_gp:
+            J[out, out] -= beta_gp
         step = -np.linalg.lstsq(J[np.ix_(free, free)], r, rcond=1e-12)[0]
         t = 1.0
         for _ in range(40):
             Vn = V.copy(); Vn[free] += t * step
-            if np.abs(F_J(Vn)[0][free]).max() < nr: V = Vn; break
+            if np.abs(F_J(net, K, Vn, Is, n, x, beta_gp)[0][free]).max() < nr: V = Vn; break
             t *= 0.5
         else: break
     return V
+
+
+def loss_grad(net, w, X, vsig, Is, n, Vc=None):
+    """MSE of normalized outputs (V_out / vsig) and its exact gradient w.r.t. w."""
+    K = R.Kmat(net, w); free, out = net['free'], net['out']
+    i, j = net['br'].T
+    P, no = len(X), len(out)
+    L, g = 0.0, np.zeros(len(i))
+    for p, x in enumerate(X):
+        warm = Vc is not None and Vc[p] is not None
+        V = solve(net, K, x * vsig, Is, n, V0=Vc[p] if warm else None, steps=200 if warm else 3000)
+        if Vc is not None:
+            Vc[p] = V
+        err = V[out] / vsig - x
+        L += (err ** 2).sum() / (P * no)
+        dLdV = np.zeros(net['n']); dLdV[out] = 2 * err / (P * no) / vsig
+        _, W = F_J(net, K, V, Is, n)
+        J = W - np.diag(W.sum(1))
+        lam = np.zeros(net['n'])
+        lam[free] = np.linalg.lstsq(J[np.ix_(free, free)].T, dLdV[free], rcond=1e-12)[0]
+        g += -(lam[i] - lam[j]) * branch_dg(K[i, j], V[j] - V[i], Is, n) * (R.G_MAX - R.G_MIN)
+    return L, g
+
+
+def adam(net, X, vsig, Is, n, w0, iters=450, lr=0.03):
+    w = w0.copy(); m = np.zeros_like(w); v = np.zeros_like(w)
+    Vc = [None] * len(X); best = (np.inf, w.copy())
+    for t in range(1, iters + 1):
+        L, gr = loss_grad(net, w, X, vsig, Is, n, Vc)
+        if L < best[0]:
+            best = (L, w.copy())
+        m = 0.9 * m + 0.1 * gr; v = 0.999 * v + 0.001 * gr * gr
+        w = np.clip(w - lr * (m / (1 - 0.9 ** t)) / (np.sqrt(v / (1 - 0.999 ** t)) + 1e-8), 0, 1)
+    return best
 
 
 def evaluate(net, K, X, Vsig, Is, n):

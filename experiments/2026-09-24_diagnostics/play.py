@@ -15,6 +15,12 @@ Examples:
   python3 play.py handbuilt --data bs4 --element shockley --Is 1e-4 --vsig 1
   python3 play.py oracle --data bs2 --n-hidden 3 --element tanh
   python3 play.py train --data bs3 --n-hidden 6 --epochs 100 --holdout 3
+  python3 play.py train --data bs2 --n-hidden 3 --element shockley --sym --epochs 60
+
+Elements: rectpair (default; ideal antiparallel rectifying pair), shockley (each
+branch = Shockley diode in series with the filament), ohmic, relu, tanh, sinh.
+For shockley the nudge must shift node voltages by << kT/q (~26 mV), so the
+default beta*g_p is 1e-4 (one-sided) or 1e-3 (--sym), instead of 0.1.
 
 Data: bs2 | bs3 | bs4 | bs5 (Bars & Stripes N x N) or an explicit pattern "1,0,1,0".
 Every mode takes --help. Voltages in volts (signal 1 V unless --vsig).
@@ -88,6 +94,11 @@ def sym_outs(net, w, X, iv):
     return np.array([S.solve(net, G, x, iv, euler_steps=20000)[net['out']] for x in X])
 
 
+def sh_outs(net, w, X, a):
+    K = R.Kmat(net, w)
+    return np.array([SH.solve(net, K, x * a.vsig, a.Is, a.n)[net['out']] for x in X]) / a.vsig
+
+
 def holdout_split(X, k, seed):
     if k <= 0:
         return X, None
@@ -118,10 +129,7 @@ def cmd_handbuilt(a):
         outs = rect_outs(net, w, X, a.vf)
     else:
         print(f"  Shockley branches: I_s={a.Is:g}, n={a.n}, signal={a.vsig} V")
-        K = np.zeros((net['n'], net['n'])); i, j = net['br'].T
-        K[i, j] = a.gmin + (1 - a.gmin) * w
-        outs = np.array([SH.solve(net, K, x * a.vsig, a.Is, a.n)[net['out']]
-                         for x in X]) / a.vsig
+        outs = sh_outs(net, w, X, a)
     print(line(metrics(outs, X), '  ') + f"   ({time.perf_counter() - t0:.1f}s)")
     if a.show:
         show(outs, X, N)
@@ -139,6 +147,11 @@ def cmd_oracle(a):
             w0 = rng.uniform(0.1, 0.9, len(net['br']))
             _, w = R.adam(net, X, a.vf, w0, iters=a.iters)
             outs = rect_outs(net, w, X, a.vf)
+        elif a.element == 'shockley':
+            net = R.make_net(X.shape[1], a.n_hidden)
+            w0 = rng.uniform(0.1, 0.9, len(net['br']))
+            _, w = SH.adam(net, X, a.vsig, a.Is, a.n, w0, iters=a.iters)
+            outs = sh_outs(net, w, X, a)
         else:
             net = S.make_arch(X.shape[1], a.n_hidden, a.arch)
             w0 = rng.uniform(0.1, 0.9, len(net['edges']))
@@ -154,7 +167,8 @@ def cmd_oracle(a):
         if best is None or m['mse'] < best[0]['mse']:
             best = (m, outs)
     print(f"oracle ceiling, {a.element}, {X.shape[1]}-{a.n_hidden}-{X.shape[1]}"
-          + (f", arch={a.arch}" if a.element != 'rectpair' else '') + ":")
+          + (f", arch={a.arch}" if a.element in SYMMETRIC else '')
+          + (f", I_s={a.Is:g}, n={a.n}, signal={a.vsig} V" if a.element == 'shockley' else '') + ":")
     print(line(best[0], '  ') + f"   ({time.perf_counter() - t0:.1f}s)")
     if a.show:
         show(best[1], X, N)
@@ -165,8 +179,18 @@ def cmd_train(a):
     set_gmin(a.gmin)
     train, test = holdout_split(X, a.holdout, a.seed)
     rng = np.random.default_rng(a.seed)
-    rect = a.element == 'rectpair'
-    if rect:
+    if a.beta is None:
+        a.beta = (1e-3 if a.sym else 1e-4) if a.element == 'shockley' else 0.1
+    if a.element == 'shockley':
+        net = R.make_net(X.shape[1], a.n_hidden)
+        i, j = net['br'].T
+        w = rng.uniform(0.1, 0.9, len(net['br']))
+        relax = lambda K, x, V0=None, b=0.0: SH.solve(net, K, x * a.vsig, a.Is, a.n, V0=V0, beta_gp=b)
+        mat = lambda w: R.Kmat(net, w)
+        outs_of = lambda w, Xs: sh_outs(net, w, Xs, a)
+        dQ = lambda K, V1, V2: (SH.cocontent_dg(K[i, j], V1[j] - V1[i], a.Is, a.n)
+                                - SH.cocontent_dg(K[i, j], V2[j] - V2[i], a.Is, a.n))
+    elif a.element == 'rectpair':
         net = R.make_net(X.shape[1], a.n_hidden)
         i, j = net['br'].T
         w = rng.uniform(0.1, 0.9, len(net['br']))
@@ -174,7 +198,7 @@ def cmd_train(a):
         relax = lambda K, x, V0=None, b=0.0: R.solve(net, K, x, a.vf, V0=V0, beta_gp=b, euler_steps=4000)
         mat = lambda w: R.Kmat(net, w)
         outs_of = lambda w, Xs: rect_outs(net, w, Xs, a.vf)
-        dQ = lambda V1, V2: Phi(V1[j] - V1[i]) - Phi(V2[j] - V2[i])
+        dQ = lambda K, V1, V2: Phi(V1[j] - V1[i]) - Phi(V2[j] - V2[i])
     else:
         iv = sym_iv(a); Phi = iv[2]
         net = S.make_arch(X.shape[1], a.n_hidden, 'plain')
@@ -183,10 +207,12 @@ def cmd_train(a):
         relax = lambda K, x, V0=None, b=0.0: S.solve(net, K, x, iv, V0=V0, beta_gp=b, euler_steps=4000)
         mat = lambda w: S.Gmat(net, w)
         outs_of = lambda w, Xs: sym_outs(net, w, Xs, iv)
-        dQ = lambda V1, V2: Phi(V1[ea] - V1[eb]) - Phi(V2[ea] - V2[eb])
+        dQ = lambda K, V1, V2: Phi(V1[ea] - V1[eb]) - Phi(V2[ea] - V2[eb])
     print(f"local weak-nudge EP: {a.element}, {X.shape[1]}-{a.n_hidden}-{X.shape[1]}, "
           f"beta*g_p={a.beta}, alpha={a.alpha}, {'symmetric +-beta, ' if a.sym else ''}"
-          f"g_min={a.gmin}, {len(train)} train"
+          f"g_min={a.gmin}, "
+          + (f"I_s={a.Is:g}, n={a.n}, signal={a.vsig} V, " if a.element == 'shockley' else '')
+          + f"{len(train)} train"
           + (f" / {len(test)} held out (non-trivial)" if test is not None else "") + " patterns")
     hist, t0 = [], time.perf_counter()
     for ep in range(1, a.epochs + 1):
@@ -196,9 +222,9 @@ def cmd_train(a):
             Vp = relax(K, x, V0, a.beta)
             if a.sym:
                 Vm = relax(K, x, V0, -a.beta)
-                w = np.clip(w - a.alpha * dQ(Vp, Vm) / (2 * a.beta), 0, 1)
+                w = np.clip(w - a.alpha * dQ(K, Vp, Vm) / (2 * a.beta), 0, 1)
             else:
-                w = np.clip(w - a.alpha * dQ(Vp, V0) / a.beta, 0, 1)
+                w = np.clip(w - a.alpha * dQ(K, Vp, V0) / a.beta, 0, 1)
         if ep == 1 or ep % a.eval_every == 0 or ep == a.epochs:
             mt = metrics(outs_of(w, train), train)
             row = dict(epoch=ep, train=mt)
@@ -230,18 +256,18 @@ def main():
         q.add_argument('--vth', type=float, default=0.1, help='relu: dead-zone threshold, V')
         q.add_argument('--steepness', type=float, default=10.0, help='tanh: I = g*tanh(k V)')
         q.add_argument('--v0', type=float, default=0.25, help='sinh: I = g*V0*sinh(V/V0)')
+        q.add_argument('--Is', type=float, default=1e-4, help='shockley: saturation current (units of g_max*1V)')
+        q.add_argument('--n', type=float, default=1.0, help='shockley: ideality factor')
+        q.add_argument('--vsig', type=float, default=1.0, help='shockley: signal amplitude, V')
         q.add_argument('--show', action='store_true', help='print every reconstruction')
 
     q = sub.add_parser('handbuilt', help='AND/OR network for N x N B&S (existence proof)')
     common(q, ('rectpair', 'shockley'), 'rectpair')
     q.add_argument('--pullup', type=float, default=0.2, help='weak pull-up conductance of AND detectors')
-    q.add_argument('--Is', type=float, default=1e-4, help='shockley: saturation current (units of g_max*1V)')
-    q.add_argument('--n', type=float, default=1.0, help='shockley: ideality factor')
-    q.add_argument('--vsig', type=float, default=1.0, help='shockley: signal amplitude, V')
     q.set_defaults(func=cmd_handbuilt)
 
     q = sub.add_parser('oracle', help='best any conductances can do (exact gradients; not physical)')
-    common(q, SYMMETRIC + ('rectpair',), 'rectpair')
+    common(q, SYMMETRIC + ('rectpair', 'shockley'), 'rectpair')
     q.add_argument('--n-hidden', type=int, default=6)
     q.add_argument('--arch', default='plain', choices=('plain', 'bias', 'dual', 'dual+bias'),
                    help='symmetric elements only: bias nodes / complementary inputs')
@@ -251,10 +277,11 @@ def main():
     q.set_defaults(func=cmd_oracle)
 
     q = sub.add_parser('train', help='physical local rule: weak-nudge EP on co-content')
-    common(q, SYMMETRIC + ('rectpair',), 'rectpair')
+    common(q, SYMMETRIC + ('rectpair', 'shockley'), 'rectpair')
     q.add_argument('--n-hidden', type=int, default=6)
     q.add_argument('--epochs', type=int, default=100)
-    q.add_argument('--beta', type=float, default=0.1, help='nudge strength beta*g_p (weak!)')
+    q.add_argument('--beta', type=float, default=None,
+                   help='nudge strength beta*g_p (default 0.1; shockley 1e-4, or 1e-3 with --sym)')
     q.add_argument('--alpha', type=float, default=0.5, help='learning rate')
     q.add_argument('--sym', action='store_true', help='symmetric nudging (+beta/-beta)')
     q.add_argument('--holdout', type=int, default=0, help='hold out k non-trivial patterns as a test set')

@@ -26,6 +26,7 @@ judged against a ceiling instead of against zero.
 | `threshold_floor.py` | Why the single-pattern plateau is MSE ≈ 0.03–0.05: the ReLU transport threshold costs V_th per hop. | ~30 s |
 | `symmetric_elements.py OUT.json` | E1: ceilings for ohmic / ReLU (V_th=0.1) / sinh edges on `[1,0,1,0]`, 2×2 and 3×3 B&S, with bias nodes and complementary inputs. E2: alignment of the EP estimate with the true gradient vs nudge strength. E3: repo rule vs weak-nudge EP on 2×2 B&S. | ~3 min |
 | `rectifying_pairs.py OUT.json` | Edges as antiparallel pairs of rectifying memristors. E4 ceilings, E5 hand-built AND/OR network (existence proof), E6 held-out generalization, E7 local EP on 2×2 and 3×3 B&S. | ~4 min |
+| `shockley_pairs.py` | The hand-built 3×3 network with realistic branches: Shockley diode in series with the programmable filament. No hard threshold; shows the trade-off rectification ratio R ↔ turn-on drop ≈ n·(kT/q)·ln R, and which signal amplitudes work. | ~3 min |
 | `rectifying_local_ep_long.py OUT.json` | Local EP on rectifying pairs, 3×3 B&S, 300 epochs; all 14 patterns, and 10 train / 4 held out. | ~2–5 min |
 
 Run from this directory, e.g. `python3 symmetric_elements.py /tmp/sym.json`. Committed

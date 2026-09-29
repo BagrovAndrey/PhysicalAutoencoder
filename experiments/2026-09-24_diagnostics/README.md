@@ -33,6 +33,45 @@ Run from this directory, e.g. `python3 symmetric_elements.py /tmp/sym.json`. Com
 results: `results_symmetric.json`, `results_rectifying.json`, `results_long_ep.json`
 (raw weights stripped).
 
+## Playground: `play.py`
+
+Command-line access to all of the above, so network size, element and parameters are
+flags rather than constants. Run from this directory; every mode takes `--help`.
+
+```bash
+# existence proof: hand-built AND/OR network for N x N Bars & Stripes
+python3 play.py handbuilt --data bs3 --show               # 14/14, prints every reconstruction
+python3 play.py handbuilt --data bs3 --vf 0.1             # ideal pairs with a forward drop
+python3 play.py handbuilt --data bs3 --element shockley --Is 1e-4 --n 1 --vsig 1
+python3 play.py handbuilt --data bs4 --pullup 0.1 --gmin 0.001
+
+# ceiling: the best any conductance setting can reach (exact gradients, not physical)
+python3 play.py oracle --data bs3 --n-hidden 6 --element rectpair
+python3 play.py oracle --data bs2 --n-hidden 3 --element tanh --steepness 2
+python3 play.py oracle --data bs2 --n-hidden 3 --element ohmic --arch dual+bias
+
+# the physical local rule: weak-nudge EP, each branch learns from its own co-content
+python3 play.py train --data bs2 --n-hidden 3 --epochs 60
+python3 play.py train --data bs3 --n-hidden 6 --epochs 200 --holdout 3 --show
+python3 play.py train --data bs2 --n-hidden 3 --element tanh --steepness 2 --epochs 40
+```
+
+Elements: `rectpair` (antiparallel rectifying pair, optional `--vf`), `shockley`
+(handbuilt only), `ohmic`, `relu` (`--vth`), `tanh` (`--steepness`), `sinh` (`--v0`).
+Data: `bs2`…`bs5` or an explicit pattern such as `1,0,1,0`. `--holdout k` holds out k
+non-trivial patterns (never all-zeros/all-ones) as a test set.
+
+Things found while building it (2026-09-29):
+- **4x4 needs a better on/off ratio.** The hand-built 16-8-16 network reaches only 73%
+  at `g_min = 0.01` whatever the pull-up, and 100% at `g_min = 0.001`: each node has twice
+  the fan-in of the 3x3 case, so the summed leakage grows with network size. The required
+  `g_max/g_min` scales with fan-in.
+- **Saturation blocks local learning.** With `tanh(10 V)` edges the oracle ceiling on 2x2
+  is good (0.033) but the local rule does not learn at any learning rate tried: at 1 V
+  signals most edges are saturated and the nudge cannot propagate through them. With
+  `tanh(2 V)` the same rule reaches 100% (MSE 0.040 vs ceiling 0.038). The saturation
+  scale must be comparable to the signal, the physical counterpart of vanishing gradients.
+
 ## Conventions inside these scripts
 
 - `w ∈ [0,1]`, `g = g_min + (g_max − g_min)·w`, `g_min = 0.01`, `g_max = 1`, as in the repo.

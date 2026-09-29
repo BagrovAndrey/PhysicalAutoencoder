@@ -51,8 +51,8 @@ class Trainer:
                 timescale) and how far the solver is allowed to relax.
                 Set this explicitly to vary one without the other.
             check_window: warn if each memristor's averaging window does not
-                span exactly one phase. See the warning text for why that
-                matters - it is the difference between learning and not.
+                span exactly one phase. Measured to be the difference between
+                learning and not; the mechanism is disputed (SPEC 3.5).
         """
         self.grid = grid
         self.memristors = memristors
@@ -90,13 +90,17 @@ class Trainer:
             window_pts / micro_steps = 1.0   ->  MSE 0.242 -> 0.033
             window_pts / micro_steps = 0.5   ->  MSE 0.242 -> 0.493 (no learning)
 
-        Why: V is held constant within a phase, so a window shorter than the
-        phase saturates at the current phase's Q and carries no memory of
-        the other phase. The lag of a window exactly one phase long is what
-        encodes the per-edge free/clamped contrast that plasticity needs.
-        Physically this says the device's internal relaxation time must be
-        matched to the drive period - it is a constraint on the element, not
-        a hyperparameter.
+        The measurement stands; its explanation is DISPUTED (docs/SPEC.md,
+        section 3.5). The original story was: V is constant within a phase, so
+        a shorter window saturates at the current phase's Q, while a window of
+        exactly one phase lags, and that lag is the memory of the other phase.
+        But a phase-blind rule that is linear in (Q - theta), with weights
+        that change little per cycle, only sees the time integral of
+        (Q - theta), which does not depend on the window shape. The likely
+        reason it matters here is that one phase moves w by O(1) through the
+        nonlinear (1 - w) factor and the clip (hypothesis). Until this is
+        settled, do not read it as a constraint on the device (and do not put
+        it in the proposal); keep the ratio at 1 to reproduce the numbers.
         """
         windows = {mem.window_pts for mem in self.memristors.ravel() if mem is not None}
         if not windows:
@@ -106,9 +110,9 @@ class Trainer:
             warnings.warn(
                 f"memristor window_pts {sorted(bad)} != micro_steps_per_phase "
                 f"({micro_steps_per_phase}). The averaging window should span "
-                f"exactly one phase, otherwise the free/clamped contrast is lost "
-                f"and the network will not learn (it will still run and stay "
-                f"finite, which is what makes this easy to miss). "
+                f"exactly one phase: other ratios were measured not to learn on "
+                f"4->3->4 / [1,0,1,0] (why is open, see docs/SPEC.md 3.5; it "
+                f"still runs and stays finite, which makes this easy to miss). "
                 f"Pass check_window=False to silence.",
                 RuntimeWarning, stacklevel=3)
 

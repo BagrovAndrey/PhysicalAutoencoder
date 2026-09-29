@@ -685,18 +685,21 @@ def test_cli():
     r = run("--help")
     check("sim.py --help works", r.returncode == 0 and "relax" in r.stdout)
 
-    for cmd in ("relax", "train", "sweep", "stability", "bench", "info"):
+    for cmd in ("relax", "train", "oracle", "handbuilt", "sweep", "stability", "bench", "info"):
         r = run(cmd, "--help")
         check(f"subcommand '{cmd}' has help", r.returncode == 0)
 
     # A free-phase relaxation from the CLI must match the library directly.
+    # sim.py runs on the vectorized engine (network/equilibrium.py) and, like
+    # training, maps the state w in [0, 1] to g = g_min + (g_max - g_min) w.
     r = run("relax", "--beta", "0", "--iv", "ohmic", "--max-steps", "50000")
     check("sim.py relax runs", r.returncode == 0, r.stderr.strip()[:120])
 
     adjacency, weights, input_nodes, output_nodes, _ = build_autoencoder(4, 3)
     pattern = np.array([1.0, 0.0, 1.0, 0.0])
     grid = Grid(adjacency, input_nodes, pattern.copy(), capacitances=1.0)
-    solver = VoltageDynamics(grid, build_static_memristor_array(adjacency, weights, ohmic))
+    conductances = np.where(adjacency > 0, 0.01 + 0.99 * weights, 0.0)
+    solver = VoltageDynamics(grid, build_static_memristor_array(adjacency, conductances, ohmic))
     V_init = np.zeros(len(adjacency)); V_init[input_nodes] = pattern
     expected = solver.relax_transient(V_init, dt=0.001, max_steps=50000, tol=1e-10)
     expected_mse = float(np.mean((expected['V_final'][output_nodes] - pattern) ** 2))

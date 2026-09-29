@@ -1,83 +1,123 @@
 # MeroCircuit — status, diagnosis and research plan
 
-*Last updated 2026-09-24. Audience: coding agents (Codex) and the team. Read
+*Last updated 2026-09-29. Audience: coding agents (Codex) and the team. Read
 [`AGENTS.md`](../AGENTS.md) first for working rules.*
 
 ## 0. How to use this document
 
 Sections 1–2 describe the model and the code as it is. Section 3 is a measured diagnosis
-of why learning stalls; every number there is reproducible with the scripts in
-[`experiments/2026-09-24_diagnostics/`](../experiments/2026-09-24_diagnostics/). Section
-4 is the plan: ordered work packages (WP), each with deliverables and acceptance
-criteria. Section 5 lists physics decisions that belong to the team, not to an agent —
-implement those options behind flags with unchanged defaults, and report; do not choose.
+of why learning stalls; every number there is reproducible with `sim.py` or with the
+scripts in [`experiments/2026-09-24_diagnostics/`](../experiments/2026-09-24_diagnostics/)
+(commands in section 7). Section 4 is the plan: ordered work packages (WP), each with
+deliverables, acceptance criteria and current status. Section 5 lists physics decisions
+that belong to the team, not to an agent — implement those options behind flags with
+unchanged defaults, and report; do not choose.
 
-Scope for agents: WP0–WP3 are engineering with clear acceptance tests. WP4–WP7 are
-research: run the experiments, report honestly (including negative results), and do not
-tune until a number looks good.
+Claims are marked by strength: **measured** (reproducible command), **derived** (an
+argument, checked numerically where noted), **hypothesis** (not yet tested). Do not
+promote a hypothesis in the proposal or in code comments.
+
+Scope for agents: WP0–WP3 are engineering (done, see status lines). WP4–WP7 are research:
+run the experiments, report honestly (including negative results), and do not tune until
+a number looks good.
 
 ## 1. The model
 
 **Network.** Graph with node potentials `V_i` and adaptive edges. Input nodes are clamped
-to the pattern (`0`/`1` V). Output nodes are paired one-to-one with inputs. The default
-topology is a bipartite autoencoder `n_in → n_h → n_in` (every input connected to every
-hidden node, every hidden to every output; no input–output edges).
+to the pattern times the signal amplitude `V_sig` (default 1 V). Output nodes are paired
+one-to-one with inputs. The default topology is a bipartite autoencoder `n_in → n_h → n_in`
+(every input connected to every hidden node, every hidden to every output; no
+input–output edges). Optional extra clamped nodes: bias (0 and `V_sig`), complementary
+inputs (`V_sig − x`).
 
-**Edges.** State `w ∈ [0,1]`, conductance `g = g_min + (g_max − g_min)·w` with
-`g_min = 0.01`, `g_max = 1`. Current `I = g·f(ΔV)` with a fixed I-V curve `f`: ohmic,
-thresholded ReLU with dead zone `f(x) = sign(x)·max(|x| − V_th, 0)` (`V_th = 0.1`, eq. 15
-of the proposal), sigmoid, or diode (`network/iv_characteristics.py`).
+**Edges** (`network/elements.py`). State `w ∈ [0,1]`, conductance
+`g = g_min + (g_max − g_min)·w`, `g_min = 0.01`, `g_max = 1`. Current `I(g, ΔV)`:
 
-**Energy.** With `Φ' = f`, stationary states minimize
-`E(V; w, β) = Σ_edges g·Φ(ΔV) + (β·g_p/2)·Σ_k (V_out,k − V_in,k)²`. The second term is the
-penalty link; only the product `β·g_p` enters the physics.
+| element | current | notes |
+|---|---|---|
+| `ohmic` | `g·ΔV` | |
+| `relu` | `g·sign(ΔV)·max(|ΔV| − V_th, 0)` | dead zone, `V_th = 0.1` (eq. 15 of the proposal); repo default |
+| `tanh` / `sigmoid` | `g·tanh(k·ΔV)` | `sigmoid` = historical name for `k = 10` |
+| `sinh` | `g·V0·sinh(ΔV/V0)` | |
+| `rectpair` | two antiparallel branches, each `g_b·max(ΔV − V_f, 0)` | independent states per branch; ideal diode, optional forward drop `V_f` |
+| `shockley` | two antiparallel branches, each a Shockley diode in series with the filament `g_b`: `ΔV = n·V_T·ln(1 + I/I_s) + I/g_b` | closed form via Wright omega; `V_T = 25.85 mV` |
 
-**Inference** = relaxation `C·dV/dt = −∂E/∂V` from `V_free = 0` with inputs clamped
-(`network/dynamics.py`, explicit Euler). **Free phase** `β = 0`; **clamped phase** `β > 0`.
+**Co-content.** For an element with current `I(V)` the co-content is
+`Φ(V) = ∫₀^V I(V') dV'` (Millar 1951; the "dual" of the energy stored in a resistor, it is
+the quantity a network of nonlinear resistors minimizes). For an ohmic edge `Φ = g·V²/2`
+(half the dissipated power); for a dead-zone ReLU `Φ = (g/2)·max(|V| − V_th, 0)²`. The EP
+observable of an element is `∂Φ/∂g` at its own voltage — `V²/2` only for ohmic edges.
+For the Shockley branch it is `(I/g)²/2`: half the squared voltage across the filament,
+not across the whole branch.
 
-**Learning.** Two implemented paths on the same substrate:
-- *Explicit contrastive* (`training/plasticity.py`): `dw = −η·(Q_clamped − Q_free)·(1 − w) − γ·w`
-  with `Q = ΔV²` from two relaxed snapshots.
-- *Online* (`training/trainer.py`, `training/rules.py`): each memristor averages its own
-  `Q` over a boxcar window exactly one phase long; `dw = −η·(Q_avg − θ)·(1 − w) − γ·w` with one
-  slowly adapting network-wide `θ`. No phase label reaches any element. The window must
-  span exactly one phase or learning stops (DEVELOPMENT.md, "The window must span one phase").
+**Energy.** Stationary states minimize
+`E(V; w, β) = Σ_branches Φ_b(ΔV_b; g_b) + (β·g_p/2)·Σ_k (V_out,k − V_in,k)²`. The second term is
+the penalty link; only the product `β' = β·g_p` enters the physics.
 
-**Equilibrium propagation (EP), for reference.** For small nudge `β' = β·g_p`, the gradient
-of the reconstruction loss is `∂L/∂g ≈ (1/β')·[Φ(ΔV^β) − Φ(ΔV^0)]`, so gradient descent is
-`Δg ∝ −(1/β')·[Φ(ΔV^β) − Φ(ΔV^0)]` — the co-content `Φ` of *that* element, evaluated in the
-two phases. Three consequences used below: the sign is **negative** (the code uses `−η`;
-eq. 14 of the proposal is written with `+η` and should be corrected); the local observable
-is the element's co-content (`ΔV²/2` only for ohmic elements); and the nudge must be
-*weak* relative to network conductances, with the difference divided by `β'`.
+**Inference** = relaxation `C·dV/dt = −∂E/∂V` from `V_free = 0` with inputs clamped.
+**Free phase** `β = 0`; **nudged (clamped) phase** `β > 0`. Two protocols
+(`--protocol`): `exposure` — explicit Euler for a fixed step budget (the historical
+"fixed exposure time"; the free phase is usually *not* at equilibrium), and `equilibrium`
+— fully relaxed stationary state.
+
+**Learning.** Three rules, all in `training/learning.py` and `sim.py train --rule`:
+- `contrastive` (historical, `training/plasticity.py`): `dw = −η·(Q_clamped − Q_free)·(1 − w) − γ·w`
+  with `Q = ΔV²` from two snapshots; strong nudge `β' = 1000`.
+- `global-theta` (historical online rule, `training/trainer.py`): each memristor averages
+  its own `Q` over a window; `dw = −η·(Q_avg − θ)·(1 − w) − γ·w` with one slowly adapting
+  network-wide `θ`. No phase label reaches any element.
+- `ep` (equilibrium propagation): `Δw = −α·[∂Φ/∂g(nudged) − ∂Φ/∂g(free)]/β'`, weak nudge
+  (default `β' = 0.1`), optional symmetric `±β'` and soft bounds.
+
+`contrastive` and `ep` need each element to know which phase it is in (to sign its
+observable): an implicit **clock**. Only `global-theta` is clock-free.
+
+**EP, for reference** (derived; Scellier & Bengio 2017). For small `β'`,
+`∂L/∂g ≈ (1/β')·[∂Φ/∂g(ΔV^β) − ∂Φ/∂g(ΔV^0)]`. Consequences: the sign of the update is
+**negative** (the code uses `−η`; eq. 14 of the proposal has `+η` and should be corrected);
+the observable is the co-content derivative of *that* element; the nudge must be *weak*
+and the difference divided by `β'`. For elements with sharp curvature the nudge must be
+weak on the element's own voltage scale (section 3.6).
 
 ## 2. Where the code stands
 
-- Solver, both learning paths, `sim.py` CLI, divergence detection, Bars & Stripes
-  generator, plotting. See README.
-- Regression canaries: `python3 tests/test_smoke_sweep.py` → 64 passed (~3 min);
-  `python3 tests/test_plasticity.py` → `Final MSE: 0.050202`.
-- Single pattern `[1,0,1,0]`, 4→3→4: contrastive rule → MSE 0.044–0.050 (40 cycles); online
-  rule → 0.033 with the fixed-exposure protocol, 0.052 with the free phase fully relaxed.
-  All bit-correct after thresholding at 0.5.
-- Datasets: the loop runs (`sim.py train --dataset bars-stripes`) but no configuration
-  learns 2×2 Bars & Stripes to its ceiling, and none reconstructs 3×3.
-- Cost: pure-Python O(n²) inner loop; extrapolated to 64→8→64 it is several ms per step
-  (3–18 ms measured on different machines/loads, `sim.py bench`), i.e. hours per
-  training run. The free phase needs ~40k steps at `dt = 0.001` to converge. Explicit Euler is stable only
-  up to `dt ≈ 0.002` at `β·g_p = 1000`.
+- **Engine** (`network/elements.py`, `network/equilibrium.py`): vectorized relaxation for
+  every element, both protocols, exact gradients. The explicit Euler path reproduces
+  `VoltageDynamics.relax_transient` to machine precision (ohmic/ReLU/sigmoid, free and
+  `β' = 1000`); `sim.py bench` measures ~17–23 µs per Euler step from 4-3-4 to 25-8-25
+  (the object engine: milliseconds per step at 64-8-64).
+- **Rules and loop** (`training/learning.py`): the three rules, shuffled epochs,
+  held-out split, metrics. The historical numbers are reproduced exactly and 8–9× faster:
+  `contrastive`, 40 cycles → 0.043978 (13 s instead of 117 s); `global-theta`, 25 cycles →
+  0.032565 (7 s instead of 59 s).
+- **One CLI**, `sim.py`: `relax`, `train`, `oracle`, `handbuilt`, `sweep`, `stability`,
+  `bench`, `info`. (`experiments/2026-09-24_diagnostics/play.py` was folded into it.)
+- **Legacy engine** (Grid + Memristor objects + `VoltageDynamics` + `Trainer`) is kept for
+  the library API and the regression canaries; nothing in it changed physically.
+- **Tests / canaries:** `tests/test_smoke_sweep.py` → 66 passed (~2–3 min);
+  `tests/test_plasticity.py` → `Final MSE: 0.050202`; `tests/test_engine.py` → 58 passed
+  (~30 s: legacy agreement, element derivatives, co-content, equilibrium, gradient checks,
+  EP alignment, hand-built 14/14, learning).
+- **Metrics:** MSE; bit accuracy (threshold 0.5); exact-pattern fraction; margin
+  `min |V_out/V_sig − 0.5|`; and the **distribution of wrong pixels per pattern** (on
+  Bars & Stripes errors come in whole lines, so the distribution has gaps).
+- **Changed behaviour** (2026-09-29): `sim.py relax` now maps `w → g` exactly like
+  training does; before it used the raw `w` as conductance, so its printed voltages
+  differ slightly from earlier versions.
+- **Found, not fixed** in legacy code: `network/iv_characteristics.diode_iv` does not
+  conserve current when an edge is evaluated from both ends (the net current summed over
+  the network is +4.67 on the 4-3-4 test net), so it was not ported; the `linear`
+  observable in `training/rules.py` is not reciprocal for undirected edges
+  (`sign(ΔV)` flips with the orientation) and was not ported either.
 
-## 3. Diagnosis (measured 2026-09-24)
+## 3. Diagnosis
 
-Tools (see the diagnostics README): a fast solver (Euler gradient flow + active-set Newton)
-that matches `VoltageDynamics` to ~1e-9; exact gradients of the reconstruction MSE through
-the equilibrium (implicit function theorem, finite-difference checked to ~1e-9); and an
-**oracle** — projected Adam with those exact gradients. The oracle is not physical; it
-estimates the best reconstruction *any* conductance setting of an architecture can reach.
-Metrics: MSE; bit accuracy (threshold 0.5); **exact** = fraction of patterns with every
-pixel right; **margin** = min |V_out − 0.5|.
+Tools: the engine above; exact gradients of the reconstruction MSE through the
+equilibrium (implicit function theorem, finite-difference checked); an **oracle** —
+projected Adam with those gradients. The oracle is not physical; it estimates the best
+reconstruction *any* conductance setting of an architecture can reach.
 
-### 3.1 The single-pattern plateau is the transport threshold
+### 3.1 The single-pattern plateau is the transport threshold (measured, 2026-09-24)
 
 A hand-wired *ideal* 4→2→4 network for `[1,0,1,0]` (strong edges exactly where needed),
 inference from `V = 0` (`threshold_floor.py`):
@@ -89,23 +129,31 @@ inference from `V = 0` (`threshold_floor.py`):
 | **0.1** | [0.78 0.23 0.78 0.23], 0.0504 | **[0.8 0.2 0.8 0.2], 0.0401** | **0.04** |
 | 0.2 | [0.59 0.41 0.59 0.41], 0.1692 | [0.6 0.4 0.6 0.4], 0.1601 | 0.16 |
 
-Each hop costs `V_th`. Inside the dead zone a strong edge carries no current, so a node
-drifts wherever the *weakest* leak pushes it until it sits `V_th` away; two hops cost
-`2·V_th` on every output. The online rule's stopping point `[0.779, 0.128, 0.779, 0.128]`
-(MSE 0.0326) is this floor. The fixed-exposure protocol looks better (0.033) than the
-fully relaxed network (0.052), most likely because drift through a leak of conductance
-`g_min` has time constant `C/g_min ≈ 100`, much longer than the exposure of 10 — the
-truncation stops the drift early rather than doing anything useful. The oracle for this network also lands at 0.0504; it is a ceiling, not a failure to
-learn.
+Mechanism (derived). Output nodes float: no current leaves them except through the
+network. Under gradient flow from `V = 0` a floating node is pulled toward its strongly
+connected neighbour only while the drop exceeds `V_th`; inside the dead zone the strong
+edge carries no current, so the node stops `V_th` short (then only the weak `g_min`
+leaks move it). Along a path of `h` edges from a clamped input to a floating output the
+shortfall adds up hop by hop: here `h = 2`, so a `1` arrives as `1 − 2·V_th = 0.8` and a
+`0` as `0.2`, MSE `(2·V_th)²`. The cost depends on the **path length** (number of layers),
+not on the width, and it applies to floating nodes relaxed from `V = 0`; a node held by
+current from both sides (a hidden node between two driven nodes) sits wherever the
+balance puts it. The `global-theta` stopping point `[0.779, 0.128, 0.779, 0.128]` (MSE
+0.0326) is this floor; the fixed-exposure protocol (0.033) looks better than the fully
+relaxed network (0.052) most likely because the leak through `g_min` has time constant
+`C/g_min ≈ 100`, much longer than the exposure of 10. The oracle lands at 0.0504: a ceiling,
+not a failure to learn.
 
-Side effect: gradient flow parks many edges exactly at `|ΔV| = V_th` (the kink of `f`),
-so the loss is only piecewise smooth at the operating point. Treat gradient-based analysis
-of the dead-zone model with care.
+Side effect: gradient flow parks many edges exactly at `|ΔV| = V_th` (the kink), so the
+loss is only piecewise smooth at the operating point; the oracle optimizes a smoothed
+surrogate for `relu` and evaluates with the exact curve.
 
 The proposal (section "Operating regimes") asks for inference amplitudes comparable to
 `V_th` so that the nonlinearity participates. That is in direct tension with this floor.
+Note that the smooth `sigmoid` (`tanh(10 V)`) has no dead zone, which is why the best
+single-pattern logs came from it.
 
-### 3.2 The learning rule runs in the wrong regime
+### 3.2 The learning rule runs in the wrong regime (measured, 2026-09-24)
 
 Alignment (cosine) between the EP estimate and the true gradient, ohmic 4→3→4 at the repo's
 initial weights (`symmetric_elements.py`, E2; `[1,0,1,0]` / 2×2 B&S):
@@ -121,7 +169,9 @@ initial weights (`symmetric_elements.py`, E2; `[1,0,1,0]` / 2×2 B&S):
 
 \*`−ΔQ·(1 − w)` with `Q = ΔV²`: the `(1 − w)` factor alone costs ~10% alignment even at weak
 nudge. Symmetric nudging at `β·g_p = 1` fails because the anti-nudge `−β` is a negative
-conductance comparable to the network's and distorts the state.
+conductance comparable to the network's and distorts the state. The bias grows with `β'`
+and depends on the weights: at seed 1, summed over 2×2 B&S, the one-sided cosine is 0.88
+at 0.1 and 0.998 at 0.01 (`tests/test_engine.py` uses 0.01).
 
 Learning on 2×2 B&S, 4→3→4, 60 epochs, one pattern per update, fully relaxed phases (E3):
 
@@ -134,15 +184,13 @@ Learning on 2×2 B&S, 4→3→4, 60 epochs, one pattern per update, fully relaxe
 | EP, β' = 0.1 | sinh | 0.061 | 1.00 | 0.054 |
 
 Weak-nudge EP reaches the ceiling; the repo rule does not. "Exact" oscillates between 0.67
-and 1.00 at the ceiling because the ceiling's margin is 0.008 — a bit flips back and forth.
+and 1.00 at the ceiling because the ceiling's margin is 0.008.
 
-Also noted, not yet tested: the `(1 − w)` factor multiplies depression as well as
-potentiation, so depression vanishes near `w = 1` and is unbounded (hard-clipped) at
-`w = 0`. Weights pile up at the bounds (`w_at_bounds` ≈ 0.5 after the repo rule). Compact
-memristor models use window functions vanishing at both ends (potentiation ∝ `1 − w`,
-depression ∝ `w`); worth adopting.
+Not yet tested: the `(1 − w)` factor multiplies depression as well as potentiation, so
+depression vanishes near `w = 1`. `--soft-bounds` (potentiation ∝ `1 − w`, depression ∝ `w`)
+is implemented for `ep`; no study yet.
 
-### 3.3 Passive networks of symmetric elements cannot represent Bars & Stripes
+### 3.3 Passive networks of symmetric elements cannot represent Bars & Stripes (measured + derived)
 
 Oracle ceilings (`symmetric_elements.py`, E1; best of 2 restarts, 1 for 3×3):
 
@@ -155,232 +203,244 @@ Oracle ceilings (`symmetric_elements.py`, E1; best of 2 restarts, 1 for 3×3):
 | 3×3 B&S (14) | 3 | 0.110 / 0.43 | — | 0.119 / 0.29 |
 | 3×3 B&S | 5 | 0.067 / 0.14 | — | 0.083 / 0.29 |
 
-Adding bias nodes (clamped at 0 and 1) and/or complementary inputs `1 − x` did **not**
-help: 2×2, n_h = 3, ohmic: 0.045 / 0.044 / 0.047 (bias / dual / both); 3×3 dual+bias
-n_h = 5: 0.102 / 0.43.
+Bias nodes and/or complementary inputs did **not** help: 2×2, n_h = 3, ohmic: 0.045 /
+0.044 / 0.047 (bias / dual / both); 3×3 dual+bias n_h = 5: 0.102 / 0.43.
 
 Why, for the ohmic case: a passive network obeys the maximum principle, so
 `V_out = M·V_in` with `M` non-negative and row-stochastic, and `rank M ≤ n_h`. Exact
 reconstruction of 2×2 B&S requires `M` to be the identity on the data span
 `{1111, 0011, 0101}`; the only non-negative row-stochastic matrix doing that is `I` itself
-(rank 4 > 3). With n_h = 4 the ceiling drops to leakage level (0.0033). More generally the
-N×N B&S patterns span `2N − 1` dimensions (rows plus columns, one shared all-ones vector):
-5 for 3×3, **15 for 8×8**. The proposal's 64→8→64 target is therefore below the linear rank:
-it cannot be reached by anything close to linear, and positivity makes it worse still.
-Symmetric nonlinearities (ReLU dead zone, sinh) did not change this picture; sinh with
-`V0 = 0.25` additionally amplifies leakage at large drops.
+(rank 4 > 3). More generally the N×N B&S patterns span `2N − 1` dimensions: 5 for 3×3,
+**15 for 8×8**. The proposal's 64→8→64 target is below the linear rank. Symmetric
+nonlinearities did not change this picture. Complementary inputs do not help a passive
+network because the all-zeros and all-ones patterns force their contributions to cancel.
+The universality construction for resistive networks (Scellier & Mishra 2025) needs
+paired units *and* bias sources *and* VCVS gain; Kendall et al. (2020) use amplifiers.
 
-Complementary inputs do not help a passive network because the all-zeros and all-ones
-patterns force the complementary contributions to cancel. The universality construction for
-resistive networks (Scellier & Mishra 2025) uses paired excitatory/inhibitory units *and*
-bias sources *and* voltage-controlled voltage sources (gain) to counter attenuation;
-Kendall et al. (2020) likewise use amplifiers. Without gain, signs alone buy little.
-
-### 3.4 Rectifying antiparallel pairs: representable, partly learnable
+### 3.4 Rectifying antiparallel pairs: representable, partly learnable (measured)
 
 Bars & Stripes has AND/OR structure: a pixel is on iff its row OR its column is on, and a
-line detector is an AND over its pixels. Passive **rectifying** elements compute max
-(OR) and min (AND) natively; symmetric elements only average.
+line detector is an AND over its pixels. Passive **rectifying** elements compute max (OR)
+and min (AND) natively; symmetric elements only average.
 
-Element (`rectifying_pairs.py`): each edge `{a,b}` is two antiparallel rectifying branches
-with independent states: `K[a,b]` conducts from `b` into `a` when `V_b > V_a`, `K[b,a]` the
-reverse. `K` symmetric is ohmic; one branch at `g_min` is a diode — the edge learns its own
-rectification direction. Still passive; still EP-compatible (`E = Σ K·Φ₊(ΔV)`, each
-branch's observable is its own co-content). Physically: self-rectifying memristors are an
+Element (`rectpair`): each edge `{a,b}` is two antiparallel rectifying branches with
+independent states. Equal states: a resistor. One branch at `g_min`: a diode — the edge
+learns its own rectification direction. The element is *symmetric* (the same device
+either way round); the *state* breaks the symmetry. Still passive; still EP-compatible
+(each branch's observable is its own co-content). Self-rectifying memristors are an
 established device class (see references).
 
-- **Existence proof** (E5): a hand-built 9→6→9 network (3 row-AND + 3 column-AND
-  detectors; each output = OR of its row and column detector) reconstructs **all 14**
-  3×3 patterns exactly — MSE 0.062, margin 0.053 at `g_min = 0.01` (pull-up 0.2), and MSE
-  0.025, margin 0.16 at `g_min = 1e-4` (pull-up 0.02). By construction it generalizes to
-  unseen patterns. Compare: symmetric elements, oracle, ≤ 43% exact.
-- **It is a stable, low-loss basin.** Exact MSE gradient descent started *from* the
-  hand-built network keeps 100% exact and improves MSE to 0.049 and margin to 0.098.
-- **But random-init optimization does not find it.** Oracle from random init, rectifying
-  pairs: 2×2 n_h=3: 0.043 / 1.00 (the ohmic-like solution); 3×3 n_h=6: 0.054 / **0.29**;
-  4×4 n_h=8: 0.074 / 0.57. Lower MSE than some crisp solutions, far worse exactness.
-- **A local rule learns on it** (E7, weak-nudge EP with per-branch co-content, β' = 0.1,
-  α = 0.5): 2×2 → 100% exact by epoch 60 (MSE 0.044); 3×3, n_h = 6 → 64% exact at epoch
-  100 — better than the exact oracle from random init and than any symmetric network — but
-  over 300 epochs it plateaus at 57–64% exact, MSE ≈ 0.06.
-- **Generalization, preliminary** (3×3, 10 train / 4 held out = all-zeros, all-ones and two
-  stripe patterns): oracle 60–80% train / 25–50% test; local EP 60–70% train / 50% test.
-  Not meaningful until training reaches 100%.
+- **Existence proof**: a hand-built 9→6→9 network (3 row-AND + 3 column-AND detectors;
+  each output = OR of its row and column detector) reconstructs **all 14** 3×3 patterns —
+  MSE 0.062, margin 0.053 at `g_min = 0.01` (pull-up 0.2); MSE 0.025, margin 0.16 at
+  `g_min = 1e-4`. By construction it generalizes. `sim.py handbuilt`.
+- **Stable basin**: exact gradient descent started from it keeps 100% and improves MSE to
+  0.049, margin to 0.098.
+- **Random-init optimization does not find it**: oracle, 2×2 n_h=3: 0.043 / 1.00;
+  3×3 n_h=6: 0.054 / **0.29**–0.71 (restart-dependent; the current CLI run gives 10/14
+  patterns exact, the other 4 with 3 wrong pixels = one whole line); 4×4 n_h=8: 0.074 / 0.57.
+- **A local rule learns on it** (weak-nudge EP, β' = 0.1, α = 0.5): 2×2 → 100% exact by
+  epoch 60; 3×3, n_h = 6 → 64% exact at epoch 100, plateau 57–64% over 300 epochs.
+- **Generalization, preliminary** (3×3, 10 train / 4 held out): oracle 60–80% train /
+  25–50% test; local EP 60–70% / 50%. Not meaningful until training reaches 100%.
 
-Summary: rectification removes the *representational* barrier for this dataset; the
-barrier that remains is *trainability* — getting from random initial states into the
-AND/OR basin.
+Summary: rectification removes the *representational* barrier; what remains is
+*trainability* — getting from random states into the AND/OR basin.
 
-### 3.5 Observed or suspected, not yet tested
+### 3.5 Clock-free learning: the window effect is real, its explanation is open
 
-- **Online path on datasets.** The one-phase window that encodes the free/clamped contrast
-  also straddles every pattern switch: at the start of pattern k's free phase the window
-  still holds pattern k−1's clamped phase. Pattern-to-pattern differences in `Q` are
-  typically far larger than a weak-nudge contrast. Separately, for all-zeros and all-ones
-  patterns there is no error yet `Q_avg − θ ≠ 0`, so plasticity happens anyway. Hypothesis:
-  the online path cannot learn datasets as is. Evidence so far is weak: mean MSE ≈ 0.46–0.50
-  on 2×2 B&S with no improvement over 3 epochs, measured with the short-exposure settings
-  of `test_smoke_sweep.py` (exposure 1, 20 micro-steps), not with the corrected defaults.
+**Measured.** The `global-theta` rule learns `[1,0,1,0]` only when each memristor's window
+spans exactly one phase (`window_pts / micro_steps` = 1 → MSE 0.033; 0.5, 0.25, 0.05 →
+0.493; 2026-09-23). With the one-phase window but **no nudge** (`--beta 0`) it also ends at
+0.4925 (2026-09-29): the learning *does* come from the free/clamped contrast, not from the
+homeostatic term alone. On 2×2 B&S it has not been shown to learn.
+
+**The old explanation is disputed.** It said: V is constant within a phase, so a shorter
+window forgets the other phase, and "the lag of a one-phase window *is* the memory of the
+other phase", hence "the device's relaxation time must match the drive period". Against it
+(derived, linear response): a phase-blind rule that is linear in `Q_avg − θ`, with weights
+that change little over a cycle, integrates over a free + clamped cycle (duration `T` each)
+
+  `Σ dw ∝ −T·(Q_f + Q_c − 2θ) = −(Q_c − Q_f)·T − 2·(Q_f − θ)·T`.
+
+A window with unit DC gain changes *when* the signal arrives but not its integral, so to
+first order the window shape drops out. The first term is the contrast; the second is a
+homeostatic term that compares the edge's free-phase activity with the network average
+and carries no error signal.
+
+**The two do not fit together yet.** The measurement says the window matters decisively;
+the argument says it cannot matter to first order. The argument's premise is probably
+what fails: with the historical settings (`η = 1.05`, exposure 10, `Q ~ 0.1–1`) a single
+phase moves `w` by O(1), and the rule has the nonlinear factor `(1 − w)` and a hard clip
+at 0 and 1, so *when* within the cycle the push arrives changes where it lands
+(hypothesis). If so, the window effect is a property of fast, strongly nonlinear
+plasticity, not a device-timing constraint, and a slow-plasticity version would lose it.
+**Do not put the window mechanism in the proposal** until this is settled.
+
+Separately (derived): on datasets the homeostatic term differs per pattern, and with a weak
+nudge it is O(1) against an O(β') contrast; a clock-free rule needs *some* local signal
+correlated with the phase to extract the sign of the contrast.
+
+Checks (Andrey): (1) slow plasticity — `--eta 0.1` and `--eta 0.01` with proportionally
+more `--cycles`, window 200 vs 100: does the window dependence disappear? (2) count how
+many weights sit at the clip bounds at the end (`--json`, field `w`) for window 200 vs 100;
+(3) the same on `--dataset bars-stripes --n-input 4`.
+
+### 3.6 Realistic elements (measured, 2026-09-29)
+
+- **Forward drop.** Ideal pairs with `V_f > 0` recreate a dead zone. Only `V_f/V_sig`
+  matters (the equations are scale-invariant). The hand-built 3×3 network keeps 14/14 up
+  to `V_f/V_sig ≈ 0.1` (margin 0.003 at 0.1; comfortable at 0.05).
+- **Shockley + filament.** No hard threshold, but a rectification ratio `R` costs a
+  turn-on drop ≈ `n·(kT/q)·ln R` (Boltzmann): useful signals are ~1–3 V. Hand-built 3×3
+  works at `V_sig = 1`, `I_s = 1e-4`, `n = 1` (14/14, margin 0.006). EP on Shockley
+  branches aligns with the gradient only when the nudge shifts voltages by ≪ kT/q:
+  cosine −0.04 at `β' = 1e-2`, 0.18 at 1e-3, 0.95 at 1e-4, 1.00 below; symmetric nudging
+  0.996 at 1e-3. `sim.py` defaults: 1e-4, or 1e-3 with `--sym`. Open: millivolt nudges vs
+  kT/C noise on femtofarad nodes. Local learning on Shockley pairs is slow and untuned
+  (2×2, `--sym --alpha 10`: MSE 0.167 → 0.126, 67% exact after 40 epochs; ceiling 0.091).
+- **Saturation blocks the nudge.** `tanh(10 V)` at 1 V signals: good ceiling on 2×2
+  (0.033) but the local rule does not learn — saturated edges pass no nudge (the analog
+  of vanishing gradients). `tanh(2 V)` learns (MSE 0.040 vs ceiling 0.038). The
+  saturation scale must be comparable to the signal.
+- **On/off ratio scales with fan-in.** Hand-built 4×4 (16-8-16): 73% at `g_min = 0.01`
+  whatever the pull-up, 100% at `g_min = 0.001`: summed leakage grows with fan-in.
+
+### 3.7 Open, not yet tested
+
 - **Symmetric nudging needs an active element**: the anti-nudge is a negative conductance.
 - **Sign of eq. (14) of the proposal**: see section 1.
 
 ## 4. Work packages
 
-Order matters: WP0 makes everything else cheap; WP1 makes results comparable.
+### WP0 — Fast, exact solver — **done** (2026-09-29)
 
-### WP0 — Fast, exact solver in the library (engineering)
+Implemented as a separate engine (`network/equilibrium.py`) rather than inside
+`VoltageDynamics`: vectorized Euler with identical semantics, `relax_equilibrium`
+(Euler warm start + active-set Newton), `loss_and_grad` (implicit function theorem).
+Checked in `tests/test_engine.py`. Not done: routing `VoltageDynamics`/`Trainer`
+themselves through it (the canaries still run the object engine; `sim.py` does not).
 
-Goal: stop paying ~1 s per relaxation. Two solvers, both behind the current interface.
+### WP1 — Evaluation harness — **partly done**
 
-1. Vectorized explicit Euler with *identical semantics* to `VoltageDynamics.relax_transient`
-   (same `dt`, `max_steps`, `tol`, divergence guard, fixed-exposure protocol): replace the
-   Python double loop by dense array operations over an `(n, n)` conductance matrix.
-2. `solve_equilibrium(...)`: Euler warm start + active-set Newton to the stationary state
-   (port from `experiments/2026-09-24_diagnostics/symmetric_elements.py::solve`), for
-   the quasi-static limit the proposal actually describes.
-3. `loss_and_grad(...)`: reconstruction MSE and its exact gradient w.r.t. `w` via the
-   implicit function theorem (port `loss_grad`). This is a diagnostic ("oracle"), never a
-   learning rule.
+Done: metrics incl. wrong-pixel distribution; `--holdout k` (never all-zeros/all-ones);
+per-epoch shuffling (`--order`); `--json` output with arguments, history, final metrics
+and weights. Open: multi-seed runner (`n_seeds ≥ 3` by default), git hash in the JSON,
+experiment configs.
 
-The per-edge `Memristor` objects can stay as the *plasticity* state; the solver should read
-a conductance matrix assembled from them (or from a vector of `w`).
+### WP2 — EP-consistent learning rule — **done**, study open
 
-Acceptance:
-- `tests/test_plasticity.py` still prints `Final MSE: 0.050202` (absolute tolerance 1e-6 on
-  every logged cycle) with the vectorized Euler.
-- `test_smoke_sweep.py` passes unchanged.
-- `solve_equilibrium` agrees with `relax_transient(max_steps=400000, tol=1e-12)` to 1e-8 on
-  the 4→3→4 net (seed 42), ohmic and ReLU, free and `β·g_p = 1000`, patterns `[1,0,1,0]`,
-  `[0,1,1,0]`, `[1,1,0,0]`.
-- New test: gradient check of `loss_and_grad` vs finite differences, ohmic, 2×2 B&S,
-  relative error < 1e-6.
-- `sim.py bench` shows ≥ 20× speed-up at 16→8→16 for the Euler path.
+`--rule ep` with `β'` configurable (default 0.1), `∂Φ/∂g` from each element, `--sym`,
+`--soft-bounds`. Alignment checked in `tests/test_engine.py` (cos ≥ 0.95 at β' = 0.01 for
+ohmic, tanh, rectpair; 1e-4 for shockley). Open study: `β' ∈ {1000, 10, 1, 0.1, 0.01}` ×
+{contrastive, ep, ep + soft bounds}, multiple seeds, final MSE / exact / margin vs the
+oracle; whether soft bounds reduce weights at the bounds and whether that matters.
 
-### WP1 — Evaluation harness (engineering)
+### WP3 — Rectifying pairs as an edge element — **done**
 
-- `evaluation.py`: MSE, bit accuracy, exact-pattern fraction, margin; per-pattern table.
-- Train/test splits for B&S that **exclude all-zeros and all-ones from the test set**
-  (report them separately); fixed seeds; `n_seeds ≥ 3` by default.
-- A small runner that takes a config (dict/YAML) and writes a JSON result with config,
-  git hash, seeds, per-epoch metrics. Experiments go to `experiments/<date>_<topic>/`
-  with a README (see AGENTS.md).
-- `sim.py train --dataset` should shuffle pattern order per epoch (currently fixed order).
-
-Acceptance: re-running any config with the same seed gives an identical JSON (except
-timings).
-
-### WP2 — EP-consistent learning rule (engineering + short study)
-
-Add a rule, selectable next to the existing ones (defaults unchanged):
-`Δw = −α · [Φ(ΔV^β) − Φ(ΔV^0)] / β'` with `β' = β·g_p` configurable (default 0.1), `Φ` =
-the co-content of the edge's own I-V curve (provide `Φ` alongside each `f` in
-`network/iv_characteristics.py`), optional symmetric variant (±β'), and a soft-bound option
-(potentiation ∝ `1 − w`, depression ∝ `w`).
-
-Acceptance:
-- Unit test: cosine(EP estimate, `loss_and_grad`) ≥ 0.95 at `β' = 0.1`, ohmic, 4→3→4,
-  seed 42, `[1,0,1,0]` and 2×2 B&S.
-- On 2×2 B&S, ohmic, n_h = 3: final MSE ≤ 0.046 within 60 epochs for 3/3 seeds.
-- Study: sweep `β' ∈ {1000, 10, 1, 0.1, 0.01}` × {repo rule, EP rule, EP + soft bounds};
-  table of final MSE / exact / margin vs the oracle ceiling. Report whether soft bounds
-  reduce `w_at_bounds` and whether that matters.
-
-### WP3 — Rectifying antiparallel pairs as an edge element (engineering)
-
-Implement the element from 3.4 in the library: a directed conductance matrix `K`, current
-`F_i = Σ_j K[i,j]·r(V_j − V_i) − K[j,i]·r(V_i − V_j)`, `r(x) = max(x − V_f, 0)` with optional
-forward drop `V_f`; two plastic states per undirected edge; `Φ₊(x) = ½ r(x)²` per branch.
-Make it available to the solver(s), the EP rule and `sim.py` (`--edge rectpair`).
-
-Acceptance:
-- `K` symmetric with `V_f = 0` reproduces ohmic results to 1e-10.
-- Gradient check < 1e-6 (rectifying pairs, `V_f = 0`, 2×2 B&S).
-- The hand-built 9→6→9 network (port `handbuilt_w`) reconstructs 14/14 3×3 patterns at
-  `g_min = 0.01`, pull-up 0.2.
+`--element rectpair` (optional `--vf`) and `--element shockley`; hand-built 9→6→9 gives
+14/14 (`sim.py handbuilt`, `tests/test_engine.py`).
 
 ### WP4 — Trainability on rectifying pairs (main research question)
 
-Target: a **local** rule (WP2 on WP3) reaches 14/14 exact on 3×3 B&S in ≥ 3 of 5 seeds,
-then generalizes to held-out non-trivial patterns. Baseline to beat: 57–64% exact.
+Target: a **local** rule reaches 14/14 exact on 3×3 B&S in ≥ 3 of 5 seeds, then
+generalizes to held-out non-trivial patterns. Baseline to beat: 57–64% exact.
 
-Candidate levers — test one at a time against the baseline, 5 seeds each, 300 epochs:
+Levers — test one at a time against the baseline, 5 seeds each, 300 epochs:
 1. Initialization: asymmetric (per edge one branch strong, the other near `g_min`, random
    direction); sparse; small-and-equal.
-2. Noise/annealing: additive noise in `Δw` with decaying amplitude; learning-rate schedules.
-3. Soft bounds (WP2).
-4. Over-complete hidden layer (n_h = 9, 12) with a mild decay `γ` to prune.
-5. Curriculum: single-line patterns first, then combinations.
+2. Noise/annealing in `Δw`; learning-rate schedules.
+3. Soft bounds.
+4. Over-complete hidden layer (n_h = 9, 12) with a mild decay to prune.
+5. Curriculum: single-line patterns first.
 6. Nudge strength and symmetric nudging (see D3).
-7. Competition between hidden units: any *passive* mechanism that makes detectors
-   specialize (e.g. shared-node or resistive lateral coupling); document the physics.
-8. A nonlinear penalty link (the proposal allows it) that rewards margin rather than MSE.
+7. Competition between hidden units by a *passive* mechanism; document the physics.
+8. A nonlinear penalty link that rewards margin rather than MSE.
 
-Report for each lever: exact / MSE / margin distributions over seeds, and whether the
-learned weights resemble line detectors (see WP7). Then run the held-out protocol from WP1.
+Report for each lever: exact / MSE / margin / wrong-pixel distributions over seeds, and
+whether the learned weights resemble line detectors (see WP7).
 
 ### WP5 — Transport threshold and signal scale (study)
 
-Quantify the floor of 3.1 against `V_th / V_signal` and propose operating points.
-Deliverables: floor vs `V_th` for 1, 2, 3 hops; effect of starting inference at mid-rail
-(0.5) instead of 0; smooth monotone alternatives (sinh with `V0 ∈ {0.25, 0.5, 1}`, tanh) and
-their leakage penalty; a short recommendation. Keep the proposal's requirement (nonlinearity
-must participate at inference amplitudes) explicit in the write-up.
+Quantify 3.1 against `V_th / V_sig`: floor for 1, 2, 3 hops; inference from mid-rail
+(0.5) instead of 0; smooth alternatives (`tanh` with `k·V_sig ~ 1–3`, `sinh`) and their
+leakage; forward drop and Shockley turn-on (3.6). Keep the proposal's requirement
+(nonlinearity must participate at inference amplitudes) explicit.
 
-### WP6 — Clock-free (online) learning on datasets (research)
+### WP6 — Clock-free (online) learning (research)
 
-Test the contamination hypothesis in 3.5: decompose `Δw` over an epoch into the part due to
-pattern switches and the part due to nudging. Try protocols that keep the "no phase label
-per element" constraint: several free/clamped cycles per pattern; a free–clamped–free
-sandwich; window/`θ` time constants relative to the pattern dwell time. Compare with the
-explicit EP rule from WP2 on 2×2 B&S. Acceptance for a positive result: within 10% of the
-WP2 rule's final MSE on 2×2 B&S, 3 seeds.
+First settle 3.5: explain the window dependence on one pattern — log the contrast and
+homeostatic parts of `Σ dw` per edge separately, and test whether it survives slow
+plasticity. Then look for a clock-free mechanism that supplies a phase-correlated local
+signal (e.g. the nudge itself modulating something the element can sense; frequency
+propagation, Anisetti et al. 2024). Compare with `--rule ep` on 2×2 B&S. Positive result:
+within 10% of the EP rule's final MSE, 3 seeds.
 
 ### WP7 — Scaling and latent structure (research, after WP4)
 
-- 4×4 B&S (30 patterns): rectifying pairs, n_h = 8 (oracle from random init: 57% exact) and
-  n_h = 2N = 8 hand-built as reference.
+- 4×4 B&S (30 patterns): rectifying pairs, n_h = 8; `g_min ≤ 0.001` (3.6).
 - Latent analysis: hidden voltages per pattern; do units become row/column detectors?
-  Linear readout (bars vs stripes) from hidden voltages; generative test — clamp hidden
-  nodes, read outputs.
-- Compression: the AND/OR construction uses 2N hidden units (16 for 8×8). A line-sharing code
-  (N shared line units + 2 orientation units, output = OR(orientation AND line)) would need
-  about N + 2 bottleneck nodes, but two logic levels on each side, i.e. extra layers of
-  nodes. Unverified sketch; see D5.
+  Linear readout (bars vs stripes); generative test — clamp hidden nodes, read outputs.
+- Compression: a line-sharing code (N shared line units + 2 orientation units) would need
+  about N + 2 bottleneck nodes but extra logic layers. Unverified sketch; see D5.
 
 ## 5. Decisions reserved for the team
 
-- **D1 Element.** Adopt rectifying antiparallel pairs (or another rectifying element) as the
-  default edge? Everything in 3.3–3.4 says symmetric passive elements cannot do B&S.
-- **D2 Gain.** Allow active elements (amplifiers/VCVS) anywhere? Required by the known
-  universality construction; changes the "passive substrate" story.
+- **D1 Element.** Adopt rectifying antiparallel pairs as the default edge? (The CLI default
+  is still `relu`.)
+- **D2 Gain.** Allow active elements (amplifiers/VCVS)? Required by the known universality
+  construction; changes the "passive substrate" story.
 - **D3 Anti-nudge.** Symmetric nudging needs a negative conductance (active). Allowed?
-- **D4 Operating point.** Acceptable `V_th / V_signal`; inference from `V = 0` or mid-rail.
+- **D4 Operating point.** `V_th / V_sig`, `V_f / V_sig`; for Shockley elements the signal
+  (1–3 V) vs the nudge (≪ kT/q); inference from `V = 0` or mid-rail.
 - **D5 Target.** 64→8→64 is below the linear rank (15) and below the 2N = 16 AND/OR
   construction. Keep 8, move to ~10–16, or add depth?
-- **D6 Protocol.** Make the fully relaxed (quasi-static) equilibrium the default for physics
-  experiments, keeping finite exposure as an explicit option? It changes the canary numbers.
-- **D7 Proposal.** Correct the sign in eq. (14) and name the observable as the co-content.
+- **D6 Protocol.** Make the fully relaxed equilibrium the default for physics experiments?
+  (`--rule ep` already defaults to it; the historical rules keep `exposure` so the canary
+  numbers hold.)
+- **D7 Proposal.** Correct the sign in eq. (14); name the observable as the co-content;
+  drop the window/phase-matching claim unless 3.5 is resolved in its favour.
+- **D8 Clock.** Accept an explicit phase signal per element (EP proper), or require
+  clock-free learning (WP6)?
 
 ## 6. Guardrails (full list in AGENTS.md)
 
 Never change physics defaults silently; a refactor that claims to be physics-neutral must
-reproduce `0.050202`. Tests must assert that learning reduces error, not only that values
-stay finite. Keep `window_pts == micro_steps_per_phase` for the online path. Check
-`result['diverged']`. Report multiple seeds and all four metrics.
+reproduce `0.050202` (legacy) and `0.043978` / `0.032565` (engine). Tests must assert that
+learning reduces error, not only that values stay finite. Check `diverged`. Report
+multiple seeds and the wrong-pixel distribution, not only MSE.
 
 ## 7. Reproducing section 3
 
-From `experiments/2026-09-24_diagnostics/`:
+```bash
+python3 sim.py train                                   # 2: contrastive, 0.043978
+python3 sim.py train --rule global-theta --cycles 25   # 2: 0.032565
+python3 sim.py oracle --element relu --n-hidden 2      # 3.1: ceiling on [1,0,1,0]
+python3 sim.py oracle --element ohmic --dataset bars-stripes --n-input 9 --n-hidden 5
+python3 sim.py handbuilt --show-patterns               # 3.4: 14/14
+python3 sim.py oracle --element rectpair --dataset bars-stripes --n-input 9 --n-hidden 6
+python3 sim.py train --rule ep --element rectpair --dataset bars-stripes --n-input 9 \
+        --n-hidden 6 --epochs 100                      # 3.4: local EP on 3x3
+python3 sim.py handbuilt --vf 0.1                      # 3.6: forward drop
+python3 sim.py handbuilt --element shockley --vsig 1   # 3.6: Shockley branches
+python3 sim.py handbuilt --n-input 16 --g-min 0.001 --pullup 0.1   # 3.6: 4x4
+python3 sim.py train --rule ep --element tanh --steepness 2 --dataset bars-stripes --n-input 4 --epochs 40
+```
+
+Tables of 3.1–3.4 as published, from `experiments/2026-09-24_diagnostics/`:
 
 ```bash
 python3 threshold_floor.py                          # 3.1
 python3 symmetric_elements.py /tmp/sym.json         # 3.2, 3.3   (~3 min)
 python3 rectifying_pairs.py /tmp/rect.json          # 3.4        (~4 min)
 python3 rectifying_local_ep_long.py /tmp/long.json  # 3.4, long local-EP runs
+python3 shockley_pairs.py                           # 3.6
 ```
 
 ## 8. References
 
+- Millar, *Some general theorems for non-linear systems possessing resistance*, Phil.
+  Mag. 42, 1150 (1951) — content and co-content.
 - Scellier & Bengio, *Equilibrium propagation*, Front. Comput. Neurosci. 11, 24 (2017).
 - Laborieux et al., *Scaling equilibrium propagation to deep ConvNets by drastically
   reducing its gradient estimator bias*, Front. Neurosci. (2021) — symmetric nudging.
@@ -396,8 +456,7 @@ python3 rectifying_local_ep_long.py /tmp/long.json  # 3.4, long local-EP runs
 - Anisetti et al., *Frequency propagation: multimechanism learning in nonlinear physical
   networks*, Neural Computation 36(4) (2024) — contrast without phase switching.
 - Guzman, Ciarella & Liu, *Unsupervised and probabilistic learning with contrastive local
-  learning networks: the Restricted Kirchhoff Machine*, arXiv:2509.15842 — unsupervised
-  learning in resistor networks; differential conductances for signed couplings.
+  learning networks: the Restricted Kirchhoff Machine*, arXiv:2509.15842.
 - *Self-rectifying memristors for beyond-CMOS computing: mechanisms, materials, and
   integration prospects*, Nano-Micro Letters (2025),
   https://link.springer.com/article/10.1007/s40820-025-02035-1.

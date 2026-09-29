@@ -8,9 +8,10 @@ results JSON (see `../AGENTS.md`).
 ## `2026-09-24_diagnostics/` — current
 
 Why learning stalls: the transport-threshold floor, the nudge-strength regime of the
-learning rule, the representational ceiling of passive symmetric networks, and rectifying
-memristor pairs. Self-contained (own fast solver, cross-checked against
-`network/dynamics.py` to ~1e-9) and runnable as is. Backs `docs/SPEC.md` §3.
+learning rule, the representational ceiling of passive symmetric networks, rectifying
+memristor pairs and Shockley elements. Self-contained (own fast solver, cross-checked
+against `network/dynamics.py` to ~1e-9) and runnable as is. Backs `docs/SPEC.md` §3. For
+interactive exploration use `sim.py` (its README maps the old `play.py` commands).
 
 ## Top-level scripts (2026-09-14) — historical
 

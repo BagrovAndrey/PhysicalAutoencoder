@@ -4,7 +4,39 @@ Working document for restoring context between sessions. README.md describes
 *what* the code does; this file describes *why* it looks the way it does and
 what is currently broken.
 
-Last updated: 2026-09-24
+Last updated: 2026-09-29
+
+---
+
+## 2026-09-29: one engine, one CLI
+
+- **`sim.py` now runs on a vectorized engine** (`network/elements.py`,
+  `network/equilibrium.py`, `training/learning.py`) and absorbed
+  `experiments/2026-09-24_diagnostics/play.py` (removed): `oracle` and `handbuilt` are
+  `sim.py` subcommands, `train --rule ep` is the weak-nudge EP rule, `--element` covers
+  ohmic / relu / sigmoid (= tanh k=10) / tanh / sinh / rectpair / shockley, `--protocol`
+  picks fixed exposure or full equilibrium. The Euler path is bit-identical to
+  `VoltageDynamics`; the historical numbers are reproduced exactly and 8–9× faster
+  (contrastive 40 cycles → 0.043978 in 13 s vs 117 s; global-theta 25 cycles → 0.032565
+  in 7 s vs 59 s). The object engine stays for the Python API and the canaries.
+  `tests/test_engine.py` (58 checks) guards the engine.
+- **Changed:** `sim.py relax` maps `w → g = g_min + (g_max − g_min)·w` like training
+  does; before, it used the raw `w` as conductance (smoke test updated accordingly).
+- **Not ported, on purpose:** `diode_iv` (evaluated from both ends of an edge it does not
+  conserve current: +4.67 net on the 4-3-4 test net) and the `linear` observable (sign
+  depends on the arbitrary edge orientation, so not reciprocal).
+- **"The window must span one phase" — mechanism disputed.** See the note in that section
+  below and `docs/SPEC.md` 3.5. The measurement stands; the explanation ("the lag is the
+  memory of the other phase", "device relaxation time must match the drive period") does
+  not survive a linear-response argument, and must not go into the proposal. New data
+  point: with the one-phase window and `--beta 0` the rule does not learn (0.4925), so the
+  contrast does matter; the leading hypothesis is that it is an effect of fast, nonlinear
+  plasticity (one phase moves `w` by O(1) through `(1 − w)` and the clip).
+- **Wording fix for the threshold floor:** the `V_th` per hop applies to floating outputs
+  relaxed from `V = 0` and accumulates along the path length, not the width (SPEC 3.1).
+- Also recorded in SPEC 3.6: forward-drop tolerance (`V_f/V_sig ≲ 0.1`), Shockley
+  elements (signals 1–3 V, nudge ≪ kT/q), tanh saturation blocking the nudge, and the
+  on/off ratio needed growing with fan-in.
 
 ---
 
@@ -124,6 +156,9 @@ What it establishes:
 
 ### `sim.py`: the CLI (2026-09-23)
 
+> 2026-09-29: rebuilt on the vectorized engine, with `oracle` and `handbuilt` added; see
+> the entry at the top.
+
 Everything above was previously only reachable by editing constants inside a test file,
 which made "what does this knob do" an edit-run-revert loop. `sim.py` exposes it:
 `relax` (one relaxation, with voltages, equilibrium residual and optionally every edge
@@ -144,6 +179,10 @@ that a CLI relaxation reproduces the library's number exactly, and that a diverg
 exits non-zero rather than printing garbage.
 
 ### The window must span one phase (2026-09-23) — read this before tuning anything
+
+> **2026-09-29: the explanation below is disputed** (`docs/SPEC.md` 3.5). The table is
+> measured and reproducible; the "lag is the memory" mechanism and the conclusion about
+> device timing are not established. Keep them out of the proposal.
 
 Found by Andrey running `sim.py train --rule global-theta` on the shipped defaults and
 getting a flat, dead MSE=0.5. The defaults were wrong, but chasing that turned up a real

@@ -8,16 +8,20 @@ based on autoencoder learning principles*) for the physical framework.
 
 ## Status at a glance
 
-- **Works:** the solver, both plasticity paths, the CLI, and a 64-check regression suite.
-  A 4→3→4 network learns a single pattern `[1,0,1,0]` to MSE ≈ 0.03–0.05; thresholded at
-  0.5, the reconstruction is bit-perfect.
-- **Does not work yet:** learning a *dataset*. On 2×2 Bars & Stripes the current rules do
-  not reach the best achievable reconstruction, and for the symmetric I-V curves in the
-  repo even the best achievable reconstruction of 3×3 Bars & Stripes is poor.
+- **Works:** a fast vectorized engine with seven edge elements (ohmic, dead-zone ReLU,
+  tanh/sigmoid, sinh, rectifying antiparallel pairs, Shockley diode + filament pairs), two
+  relaxation protocols, three learning rules (historical contrastive, clock-free
+  global-theta, equilibrium propagation), an oracle (best achievable reconstruction) and a
+  hand-built existence proof, all behind one CLI, `sim.py`. A 4→3→4 network learns a single
+  pattern `[1,0,1,0]` to MSE ≈ 0.03–0.05, bit-perfect after thresholding at 0.5.
+- **Partly works:** learning a *dataset*. Weak-nudge EP reaches the best achievable
+  reconstruction on 2×2 Bars & Stripes. Symmetric elements cannot represent 3×3 at all;
+  rectifying pairs can (a hand-built network gets 14/14), but local learning from random
+  initial states plateaus at ~60% exact patterns.
 - **Why, and what to try next:** [`docs/SPEC.md`](docs/SPEC.md) — measured diagnosis
-  (threshold loss per hop, nudge-strength regime of the learning rule, representational
-  limits of passive symmetric networks) and a prioritized experiment plan.
-  [`DEVELOPMENT.md`](DEVELOPMENT.md) has the history and design decisions.
+  (threshold loss per hop, nudge-strength regime, representational limits of passive
+  symmetric networks, rectifying and Shockley elements, the open question of clock-free
+  learning) and a prioritized plan. [`DEVELOPMENT.md`](DEVELOPMENT.md) has the history.
 
 ## Installation
 
@@ -31,18 +35,21 @@ source venv/bin/activate          # Windows: venv\Scripts\activate
 pip install --upgrade pip
 pip install -r requirements.txt
 pip install -e .
-python3 tests/test_smoke_sweep.py  # ~3 min, should end with "64 passed, 0 failed"
+python3 tests/test_smoke_sweep.py  # ~3 min, should end with "66 passed, 0 failed"
+python3 tests/test_engine.py       # ~30 s, "58 passed, 0 failed"
 ```
 
 ## Quick start: the `sim.py` CLI
 
-The fastest way to get a feel for the model is to turn its knobs from the command line.
-Every subcommand takes `--help`.
+Everything runs through one CLI. Every subcommand takes `--help`; `info` lists elements,
+rules, protocols and sweepable parameters.
 
 ```bash
-python3 sim.py info                  # available I-V curves, observables, rules; default wiring
+python3 sim.py info                  # elements, rules, protocols, default wiring
 python3 sim.py relax --beta 0        # one free-phase relaxation: voltages, residual, MSE
 python3 sim.py train                 # 4->3->4 on [1,0,1,0], contrastive rule, 40 cycles
+python3 sim.py oracle                # best reconstruction any conductances can reach
+python3 sim.py handbuilt             # hand-wired AND/OR network, 3x3 Bars & Stripes, 14/14
 python3 sim.py sweep --param beta --values 0,1,10,100
 python3 sim.py stability             # where the explicit Euler solver blows up
 python3 sim.py bench                 # solver cost vs network size
@@ -51,42 +58,67 @@ python3 sim.py bench                 # solver cost vs network size
 Things worth trying:
 
 ```bash
-# Watch the penalty coupling pull the output toward the input
-python3 sim.py sweep --param beta --values 0,0.1,1,10,100 --max-steps 30000
-
-# The two plasticity paths on the same problem (both end around MSE 0.03-0.05)
+# The historical rules on one pattern (0.043978 and 0.032565)
 python3 sim.py train --rule contrastive  --cycles 40
 python3 sim.py train --rule global-theta --cycles 25
 
-# Fully relaxed free phase instead of the fixed-exposure protocol
-python3 sim.py train --rule global-theta --cycles 25 --relax-max-steps 100000
+# Equilibrium propagation proper: weak nudge, co-content observable, fully relaxed phases
+python3 sim.py train --rule ep --element rectpair --dataset bars-stripes --n-input 4 --epochs 60
+python3 sim.py train --rule ep --element rectpair --dataset bars-stripes --n-input 9 \
+        --n-hidden 6 --epochs 200 --holdout 3 --show-patterns
 
-# Other I-V curve / bigger bottleneck / the real dataset
-python3 sim.py train --iv sigmoid --n-hidden 6 --cycles 20
-python3 sim.py train --dataset bars-stripes --n-input 4 --cycles 30
+# Ceilings for different elements
+python3 sim.py oracle --element ohmic    --dataset bars-stripes --n-input 9 --n-hidden 5
+python3 sim.py oracle --element rectpair --dataset bars-stripes --n-input 9 --n-hidden 6
+python3 sim.py oracle --element tanh --steepness 2 --dataset bars-stripes --n-input 4
 
-# Save the learning curve
-python3 sim.py train --cycles 40 --plot mse.png
+# Realistic rectifiers
+python3 sim.py handbuilt --vf 0.1                            # ideal pair with forward drop
+python3 sim.py handbuilt --element shockley --Is 1e-4 --vsig 1
+python3 sim.py handbuilt --n-input 16 --g-min 0.001 --pullup 0.1   # 4x4
+
+# Parameter scans (add --train to scan a training run instead of one relaxation)
+python3 sim.py sweep --param beta --values 0,0.1,1,10,100 --max-steps 30000
+python3 sim.py sweep --param vf --values 0,0.05,0.1 --train --rule ep --element rectpair \
+        --dataset bars-stripes --n-input 4 --epochs 30
+
+# Save the learning curve / everything
+python3 sim.py train --cycles 40 --plot mse.png --json run.json
 
 # Break it on purpose: dt past the stability boundary
 python3 sim.py relax --dt 0.05 --beta 100
 ```
 
-> **"not converged" is usually not an error.** Relaxing for a fixed exposure time is the
-> intended protocol, and the free phase typically does not fully settle within it.
-> `DIVERGED` is a real failure: lower `--dt` (see *Key parameters*).
+Main flags: `--element` (`--iv` is an alias) with its parameters `--vth`, `--steepness`,
+`--v0`, `--vf`, `--Is`, `--n`; `--vsig` (signal amplitude, V); `--beta` and `--g-penalty`
+(only the product matters; default 1000 for the historical rules, 0.1 for `ep`, 1e-4 for
+`ep` on `shockley`); `--protocol exposure|equilibrium`; `--rule`; `--cycles` or `--epochs`;
+`--holdout k`; `--dataset bars-stripes` with `--n-input N²`; `--n-hidden`; `--arch`
+(`plain`, `bias`, `dual`, `dual+bias`).
 
-> **Leave `--window-pts` alone when changing `--micro-steps` or `--exposure`.** The
-> memristor's averaging window must span exactly one phase, otherwise the network stops
-> learning while still running and staying finite. `sim.py` ties the two together by
-> default and `Trainer` warns if they drift apart. Details: DEVELOPMENT.md, "The window
-> must span one phase".
+Every run ends with the **distribution of wrong pixels per pattern** (after thresholding
+at 0.5), besides MSE, bit accuracy and margin:
+
+```
+    wrong pixels |     0     1     2     3
+    patterns     |   71%    0%    0%   29%
+                 |    10     0     0     4
+```
+
+> **"not converged" is usually not an error** under `--protocol exposure`: relaxing for a
+> fixed exposure time is the historical protocol, and the free phase typically does not
+> settle within it. A blow-up is a real failure: lower `--dt`.
+
+> **`global-theta`: leave `--window-pts` alone** when changing `--micro-steps` or
+> `--exposure`. Measured: the rule learns only with a window of exactly one phase. Why is
+> an open question (SPEC 3.5) — do not read it as a device constraint yet.
 
 ## Project structure
 
 ```
 MeroCircuit/
-├── sim.py                    # CLI: relax / train / sweep / stability / bench / info
+├── sim.py                    # the CLI: relax / train / oracle / handbuilt / sweep /
+│                             #   stability / bench / info
 ├── AGENTS.md                 # Working rules for coding agents (Codex etc.)
 ├── DEVELOPMENT.md            # History, design decisions, measured findings
 ├── docs/
@@ -96,12 +128,17 @@ MeroCircuit/
 ├── memristor/
 │   └── memristor.py          # Memristor: state w, windowed local observable, plasticity hook
 ├── network/
+│   ├── elements.py           # edge elements: current, slope, dI/dg, d(co-content)/dg
+│   ├── equilibrium.py        # vectorized engine: Euler + equilibrium relaxation, exact
+│   │                         #   gradients, autoencoder topologies (what sim.py runs on)
 │   ├── dynamics.py           # VoltageDynamics: explicit-Euler relaxation, penalty coupling
 │   ├── builders.py           # build_autoencoder_topology, Memristor-array builders,
 │   │                         #   extract_weights / set_weights
 │   ├── iv_characteristics.py # ohmic, relu (dead zone), sigmoid, diode
 │   └── legacy.py             # original R_Network solver (kept, not used)
 ├── training/
+│   ├── learning.py           # engine rules (contrastive, global-theta, ep), training
+│   │                         #   loop, metrics, oracle, hand-built network
 │   ├── plasticity.py         # SimplePlasticity: explicit two-snapshot contrastive rule
 │   ├── rules.py              # plast_func rules + local observables (dV^2, dV, dV*I)
 │   └── trainer.py            # Trainer: free/clamped cycle, shared theta, online path
@@ -111,10 +148,10 @@ MeroCircuit/
 ├── visualization/
 │   ├── plotting.py           # pattern plots
 │   └── dynamics_viz.py       # voltage evolution, network states, animations
-├── experiments/              # informal scripts behind claims in DEVELOPMENT.md
-│                             #   (written against the pre-fix solver API - see its README)
+├── experiments/              # dated studies behind claims in SPEC.md / DEVELOPMENT.md
 └── tests/
-    ├── test_smoke_sweep.py           # start here: 64 checks, ~3 min
+    ├── test_smoke_sweep.py           # start here: 66 checks, ~3 min
+    ├── test_engine.py                # engine vs legacy, derivatives, EP, hand-built (~30 s)
     ├── test_dynamics_basic.py        # chains, dividers, penalty coupling
     ├── test_dynamics_autoencoder.py  # autoencoder topology, exposure protocol
     ├── test_iv_characteristics.py    # I-V curves
@@ -128,29 +165,50 @@ MeroCircuit/
 
 ## What is implemented
 
-**Physics.** Nodes with capacitances relax by explicit Euler under Kirchhoff's current
-law; input nodes are clamped; a penalty link `β·g_p·(V_in − V_out)` couples each output to
-its input in the clamped phase. Each edge is a `Memristor` with state `w ∈ [0,1]`,
-conductance `g = g_min + (g_max − g_min)·w`, and a pluggable I-V curve (ohmic, thresholded
-ReLU with dead zone, sigmoid, diode). The solver detects divergence and reports it.
+**Physics.** Nodes with capacitances relax under Kirchhoff's current law; input nodes are
+clamped; a penalty link `β·g_p·(V_in − V_out)` couples each output to its input in the
+nudged phase. Each edge has state `w ∈ [0,1]` (two states for rectifying pairs),
+conductance `g = g_min + (g_max − g_min)·w`, and an element model (`network/elements.py`).
+Two protocols: fixed exposure (explicit Euler for a step budget, detects divergence) and
+full equilibrium (Euler warm start + Newton).
 
-**Learning — two paths on the same substrate.**
-- *Explicit contrastive* (`training/plasticity.py`): relax free and clamped, compute
-  `ΔQ = Q_clamped − Q_free` per edge from the two snapshots, update all weights at once:
-  `dw = −η·ΔQ·(1 − w) − γ·w`.
-- *Online* (`training/trainer.py`, `training/rules.py`): each memristor integrates its own
-  local observable over a window one phase long and compares it with one slowly adapting,
-  network-wide threshold θ; no phase label reaches any element.
+**Learning.**
+- *Contrastive* (historical): relax free and clamped, `dw = −η·(Q_clamped − Q_free)·(1 − w) − γ·w`
+  with `Q = ΔV²`, strong nudge.
+- *Global-theta* (historical, clock-free): each memristor averages its own `Q` over a
+  window and compares it with one slowly adapting network-wide θ; no phase label reaches
+  any element.
+- *EP*: `Δw = −α·[∂Φ/∂g(nudged) − ∂Φ/∂g(free)]/β'` with `Φ` the co-content of the element,
+  weak nudge. Contrastive and EP need each element to know the phase.
 
-Note the sign: the code uses `−η` (the gradient-descent direction under equilibrium
-propagation), while eq. (14) of the proposal is written with `+η`. See `docs/SPEC.md`.
+Note the sign: the code uses `−η` (gradient descent under equilibrium propagation), while
+eq. (14) of the proposal is written with `+η`. See `docs/SPEC.md`.
 
-**Tooling.** `sim.py` CLI; Bars & Stripes generator; plotting and animation;
-`tests/test_smoke_sweep.py` covering physics invariants (Kirchhoff residual, agreement with a
-direct Laplacian solve, linearity), parameter responses, stability, that both plasticity
-paths actually reduce error, reproducibility, and the CLI.
+**Two engines.** `sim.py` runs on the vectorized engine (`network/equilibrium.py`,
+`training/learning.py`). The object engine (`Grid`, `Memristor`, `VoltageDynamics`,
+`Trainer`) is kept for the Python API below and the regression canaries;
+`tests/test_engine.py` checks that the two agree to machine precision and that the
+historical training numbers are reproduced.
 
 ## Usage from Python
+
+### Training on the engine (what `sim.py train` does)
+
+```python
+import numpy as np
+from network.elements import make_element
+from network.equilibrium import autoencoder, init_weights
+from training.learning import EPRule, Protocol, train, evaluate, metrics
+from datasets.bars_stripes import BarsAndStripes
+
+X = BarsAndStripes(N=2).get_all_flattened().astype(float)
+net = autoencoder(4, 3, make_element('rectpair'))        # 4->3->4, two branches per edge
+w0 = init_weights(net, seed=42)
+w, history, err = train(net, X, EPRule(alpha=0.5), Protocol('equilibrium'), w0,
+                        cycles=60 * len(X), beta_gp=0.1)
+m = metrics(evaluate(net, w, X, 1.0, Protocol('equilibrium')), X)
+print(m['mse'], m['exact'], m['wrong_hist'])   # ~0.056 1.0 [1.]
+```
 
 ### Bars & Stripes
 
@@ -216,6 +274,7 @@ The test files are plain scripts (except `test_bars_stripes.py`):
 
 ```bash
 python3 tests/test_smoke_sweep.py    # run after any change to solver, memristor or rules
+python3 tests/test_engine.py         # run after any change to the engine or sim.py
 python3 tests/test_plasticity.py     # 4->3->4 learning run; final MSE must stay 0.050202
 python3 tests/test_dynamics_basic.py
 pytest tests/test_bars_stripes.py -v
@@ -234,13 +293,15 @@ disables).
 > `beta` or `g_penalty` → lower `dt`, and check `result['diverged']`.
 
 **Physics.** `beta`, `g_penalty` (penalty strength is their product), `capacitances`
-(change relaxation speed, not the fixed point), `g_min`/`g_max` (0.01/1.0), and the I-V
-curve. For the thresholded ReLU the transport threshold `V_th = 0.1` costs up to `V_th` of
-signal per hop — see `docs/SPEC.md`.
+(change relaxation speed, not the fixed point), `g_min`/`g_max` (0.01/1.0), the element and
+the signal amplitude `vsig`. For the thresholded ReLU a floating output relaxed from 0
+stops `V_th` short per hop along its path — see `docs/SPEC.md` 3.1. For rectifiers only
+`V_f / V_sig` matters; Shockley elements need signals of ~1–3 V and nudges ≪ kT/q.
 
 **Learning.** `eta`, `gamma`; contrastive path: `tau_integrate`, `dt_plasticity`; online
 path: `exposure` (10), `micro_steps` (200), `window_pts` (= `micro_steps`), `tau_theta`
-(40), `relax_max_steps` (defaults to `exposure/dt`). All times are in dimensionless model
+(40), `relax_max_steps` (defaults to `exposure/dt`); EP: `alpha` (0.5), `beta·g_p` (0.1),
+symmetric nudging, soft bounds. All times are in dimensionless model
 units.
 
 ## Team

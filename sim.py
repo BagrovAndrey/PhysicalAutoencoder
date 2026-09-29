@@ -243,6 +243,40 @@ def train_online(args, net, patterns, log):
     return extract_weights(net['memristors'], net['adjacency']), None
 
 
+def evaluate_patterns(net, patterns, args, max_steps):
+    """Fresh free-phase relaxation (from V=0) for every pattern with the
+    current weights. Returns [(pattern, output voltages, n_wrong_pixels)]."""
+    solver, grid, out = net['solver'], net['grid'], net['output_nodes']
+    rows = []
+    for p in patterns:
+        grid.clamped_values = np.asarray(p, dtype=float).copy()
+        V0 = np.zeros(grid.n_nodes)
+        V0[net['input_nodes']] = p
+        r = solver.relax_transient(V0, beta=0.0, dt=args.dt, max_steps=max_steps, tol=args.tol)
+        o = r['V_final'][out]
+        rows.append((np.asarray(p), o, int(np.sum((o > 0.5) != (np.asarray(p) > 0.5)))))
+    return rows
+
+
+def print_error_distribution(rows, n_input, show_patterns=False):
+    """How many patterns come back with 0, 1, 2, ... wrong pixels (threshold 0.5)."""
+    wrong = np.array([k for _, _, k in rows])
+    counts = np.bincount(wrong, minlength=n_input + 1)
+    kmax = int(wrong.max())
+    ks = range(kmax + 1)
+    P = len(rows)
+    print(f"\n  final reconstruction, {P} pattern{'s' if P > 1 else ''} "
+          f"(fresh free relaxation, pixels thresholded at 0.5):")
+    print("    wrong pixels | " + " ".join(f"{k:>5}" for k in ks))
+    print("    patterns     | " + " ".join(f"{counts[k] / P * 100:>4.0f}%" for k in ks))
+    print("                 | " + " ".join(f"{counts[k]:>5}" for k in ks))
+    print(f"    mean wrong pixels per pattern: {wrong.mean():.2f} of {n_input}"
+          f"   (bit accuracy {100 * (1 - wrong.mean() / n_input):.1f}%)")
+    if show_patterns:
+        for p, o, k in rows:
+            print(f"    {p.astype(int)} -> {np.round(o, 2)}   wrong: {k}")
+
+
 def cmd_train(args):
     obs = OBSERVABLES[args.observable]
     if args.rule == 'contrastive':
@@ -327,6 +361,19 @@ def cmd_train(args):
     label = "mean MSE" if P > 1 else "MSE"
     print(f"  {label} {first:.6f} -> {last:.6f}   {tail}")
     print(f"  best {label}: {min(curve):.6f} at {unit} {int(np.argmin(curve)) + 1}")
+
+    # Per-pattern error distribution with the FINAL weights. The training log
+    # above shows each pattern's error before its own update, so it lags the
+    # final state; here every pattern gets a fresh free-phase relaxation with
+    # the same protocol (step budget) the rule used during training.
+    if args.rule == 'contrastive':
+        set_weights(net['memristors'], net['adjacency'], weights)
+        eval_steps = args.max_steps
+    else:
+        eval_steps = (args.relax_max_steps if args.relax_max_steps is not None
+                      else int(args.exposure / args.dt))
+    rows = evaluate_patterns(net, patterns, args, eval_steps)
+    print_error_distribution(rows, args.n_input, args.show_patterns)
 
     if args.plot:
         import matplotlib
@@ -632,6 +679,8 @@ def main():
                    help='cycle through a real dataset instead of one fixed pattern')
     p.add_argument('--log-lines', type=int, default=20, help='how many progress lines')
     p.add_argument('--plot', metavar='FILE', help='save an MSE-vs-cycle plot')
+    p.add_argument('--show-patterns', action='store_true',
+                   help='list every pattern with its final reconstruction and wrong-pixel count')
     p.set_defaults(func=cmd_train)
 
     p = sub.add_parser('sweep', help='vary one parameter and tabulate the effect')

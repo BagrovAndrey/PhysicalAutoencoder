@@ -59,15 +59,19 @@ def sym_iv(a):
 
 
 def metrics(outs, X):
+    wrong = np.sum((outs > 0.5) != (X > 0.5), axis=1)
+    hist = np.bincount(wrong, minlength=X.shape[1] + 1) / len(X)
     return dict(mse=float(np.mean((outs - X) ** 2)),
                 bits=float(np.mean((outs > 0.5) == (X > 0.5))),
-                exact=float(np.mean(np.all((outs > 0.5) == (X > 0.5), axis=1))),
-                margin=float(np.min(np.abs(outs - 0.5))))
+                exact=float(np.mean(wrong == 0)),
+                margin=float(np.min(np.abs(outs - 0.5))),
+                wrong_hist=hist[:int(wrong.max()) + 1].tolist())
 
 
 def line(m, prefix=''):
+    dist = " ".join(f"{k}:{f * 100:.0f}%" for k, f in enumerate(m['wrong_hist']))
     return (f"{prefix}MSE={m['mse']:.4f}  bits={m['bits']:.3f}  "
-            f"exact={m['exact'] * 100:.0f}%  margin={m['margin']:+.3f}")
+            f"margin={m['margin']:+.3f}  wrong px [{dist}]")
 
 
 def show(outs, X, N):
@@ -231,7 +235,8 @@ def cmd_train(a):
             msg = f"  epoch {ep:4d}  " + line(mt, 'train ')
             if test is not None:
                 ms = metrics(outs_of(w, test), test); row['test'] = ms
-                msg += f"  | test exact={ms['exact'] * 100:.0f}%"
+                msg += "  | test wrong px [" + " ".join(
+                    f"{k}:{f * 100:.0f}%" for k, f in enumerate(ms['wrong_hist'])) + "]"
             print(msg + f"  ({time.perf_counter() - t0:.0f}s)", flush=True)
             hist.append(row)
     if a.show:

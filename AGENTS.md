@@ -11,6 +11,7 @@ pip install -r requirements.txt && pip install -e .
 python3 tests/test_smoke_sweep.py   # must end "66 passed, 0 failed" (~3 min)
 python3 tests/test_plasticity.py    # must print "Final MSE: 0.050202"
 python3 tests/test_engine.py        # must end "58 passed, 0 failed" (~30 s)
+python3 tests/test_runner.py        # must end "33 passed, 0 failed" (~10 s)
 python3 sim.py train                # must end at MSE 0.043978
 python3 sim.py train --rule global-theta --cycles 25   # must end at MSE 0.032565
 ```
@@ -50,6 +51,34 @@ protocol of each rule, the plasticity rule and its
    Check alignment with `loss_and_grad` before trusting a new element.
 8. **Report honestly.** Negative results are results. Never tune until a number looks
    good and report only that number.
+
+## Working on the cluster
+
+Runs go through `experiments/cluster.sh` (local machine -> ssh -> SLURM); read its header.
+The agent lives on the local machine and does not need anything installed on the cluster.
+
+- **One track = one branch = one git worktree** (`git worktree add ../mero-A -b track-a-...`).
+  The cluster script takes the track label as an argument, so parallel tracks never share a
+  directory, a job name or a results folder.
+- **Only `cluster.sh`.** Do not run ad-hoc `ssh` commands. It does: `check`, `submit`,
+  `status`, `log`, `fetch`, `cancel`. Nothing heavy runs on the login node; the agent only
+  submits, waits and reads.
+- **A study is a committed, pushed JSON file** (`experiments/<date>_<topic>/study.json`,
+  format in `experiments/run.py`). `submit` runs a snapshot of that commit, so queued jobs
+  never see later edits and every result carries its commit hash. Never submit from a dirty
+  tree; `--refresh-code` replaces a snapshot only when no job of the study is queued.
+- **Start small.** `run.py plan STUDY` shows the runs; submit one seed or a coarse grid first;
+  check `status` (it estimates core-hours) before the full grid. Resubmitting the same study
+  runs only what is missing or failed.
+- **Results stay out of git and out of the home directory** (5 GB quota): they live under
+  `REMOTE_RUNS` on the cluster and in `LOCAL_RESULTS` locally. Commit only `study.json`,
+  `README.md` and `summary.json`.
+- **Waiting is not work.** After `submit`, write down the state (which job, which study, what
+  comes next) in the study README or your notes, and stop; collect with `fetch` later.
+- A failed run is recorded, not fatal; look at `status` and `log` before resubmitting, and
+  report failures in the README instead of silently dropping them.
+- The imperfect-device parameters, the model and the library are changed by dedicated patches
+  reviewed by the maintainer, not from an experiment branch.
 
 ## Reporting experiments
 

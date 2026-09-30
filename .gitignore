@@ -20,3 +20,6 @@ venv/
 # Editors
 .vscode/
 .DS_Store
+
+# cluster runs
+runs/

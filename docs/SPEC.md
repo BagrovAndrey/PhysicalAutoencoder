@@ -1,6 +1,6 @@
 # MeroCircuit — status, diagnosis and research plan
 
-*Last updated 2026-09-29. Audience: coding agents (Codex) and the team. Read
+*Last updated 2026-09-30. Audience: coding agents (Codex) and the team. Read
 [`AGENTS.md`](../AGENTS.md) first for working rules.*
 
 ## 0. How to use this document
@@ -321,12 +321,17 @@ Implemented as a separate engine (`network/equilibrium.py`) rather than inside
 Checked in `tests/test_engine.py`. Not done: routing `VoltageDynamics`/`Trainer`
 themselves through it (the canaries still run the object engine; `sim.py` does not).
 
-### WP1 — Evaluation harness — **partly done**
+### WP1 — Evaluation harness — **done**
 
-Done: metrics incl. wrong-pixel distribution; `--holdout k` (never all-zeros/all-ones);
-per-epoch shuffling (`--order`); `--json` output with arguments, history, final metrics
-and weights. Open: multi-seed runner (`n_seeds ≥ 3` by default), git hash in the JSON,
-experiment configs.
+Metrics incl. wrong-pixel distribution; `--holdout k` (never all-zeros/all-ones);
+per-epoch shuffling (`--order`); `--json` for `train`, `oracle` and `handbuilt`.
+Batch runner (2026-09-30): `experiments/run.py` expands a JSON study (grid × seeds) into
+independent `sim.py` runs, executes them in parallel or as a SLURM array, resumes after
+interruption; each result file holds the arguments, the code commit, metrics and weights.
+`experiments/report.py` aggregates seeds (mean ± std, perfect-seed count, held-out
+columns); `experiments/cluster.sh` submits from a local machine over ssh, running a
+snapshot of a pushed commit. Guarded by `tests/test_runner.py`. Open: routine
+comparison against the oracle ceiling inside the report.
 
 ### WP2 — EP-consistent learning rule — **done**, study open
 

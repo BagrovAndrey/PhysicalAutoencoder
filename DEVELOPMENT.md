@@ -4,7 +4,23 @@ Working document for restoring context between sessions. README.md describes
 *what* the code does; this file describes *why* it looks the way it does and
 what is currently broken.
 
-Last updated: 2026-09-29
+Last updated: 2026-09-30
+
+---
+
+## 2026-09-30: batch runner and cluster workflow
+
+Studies (grids of `sim.py` runs × seeds) are JSON files run by `experiments/run.py`
+(parallel processes, resumable, one result file per run, SLURM array backend),
+aggregated by `experiments/report.py`, and sent to the cluster by `experiments/cluster.sh`
+from the local machine over ssh (agents are not installed on the cluster). The cluster runs
+a `git archive` snapshot of the pushed commit, so queued jobs never see later edits and
+each result records its commit. One track = one branch = one worktree; results live on
+shared storage, not in git or the 5 GB home. `sim.py oracle` and `handbuilt` gained
+`--json`. First assignment: `experiments/TRACK_A.md` (realistic device parameters);
+pilot studies in `experiments/2026-10-01_pilot/`. Rules for agents: `AGENTS.md`,
+"Working on the cluster". Tests: `tests/test_runner.py` (33 checks, includes a fake-cluster
+run of `cluster.sh`).
 
 ---
 

@@ -5,6 +5,21 @@ record the empirical basis for claims in `../DEVELOPMENT.md` and `../docs/SPEC.m
 studies go in dated subfolders, `<YYYY-MM-DD>_<topic>/`, each with its own README and
 results JSON (see `../AGENTS.md`).
 
+## Running studies (batch runner, cluster)
+
+Grids of `sim.py` runs are described by a JSON study file and executed by `run.py`
+(parallel, resumable, one result file per run); `report.py` aggregates seeds;
+`cluster.sh` submits to SLURM over ssh from your own machine. See `../AGENTS.md`
+("Working on the cluster"), the header of `cluster.sh`, and the first assignment,
+[`TRACK_A.md`](TRACK_A.md). Small pilot studies to test the chain: `2026-10-01_pilot/`.
+
+```bash
+python3 experiments/run.py plan   experiments/2026-10-01_pilot/study.json    # what would run
+python3 experiments/run.py run    experiments/2026-10-01_pilot/study.json --out /tmp/pilot   # here, all cores
+python3 experiments/run.py pack   experiments/2026-10-01_pilot/study.json --out /tmp/pilot
+python3 experiments/report.py /tmp/pilot/results.jsonl
+```
+
 ## `2026-09-24_diagnostics/` — current
 
 Why learning stalls: the transport-threshold floor, the nudge-strength regime of the

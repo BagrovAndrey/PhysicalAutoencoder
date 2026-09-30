@@ -1,0 +1,9 @@
+{
+  "question": "Pilot of the cluster workflow. Does local EP on rectifying pairs (2x2 Bars & Stripes, 4-3-4) survive a forward drop V_f? Spread over 5 seeds.",
+  "command": "train",
+  "base": {"rule": "ep", "element": "rectpair", "dataset": "bars-stripes",
+           "n-input": 4, "n-hidden": 3, "epochs": 60, "protocol": "equilibrium"},
+  "grid": {"vf": [0, 0.05, 0.1]},
+  "seeds": 5,
+  "slurm": {"partition": "tcm", "time": "00:30:00", "cpus": 8, "max_parallel": 2}
+}

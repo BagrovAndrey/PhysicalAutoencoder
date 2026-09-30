@@ -268,6 +268,13 @@ animate_relaxation(V_all, adjacency, g, relu_iv, nodes_to_plot=[0, 4, 8],
                    output_file='relaxation.gif')
 ```
 
+## Batch runs and the cluster
+
+`experiments/run.py` runs a JSON-described grid of `sim.py` runs in parallel (resumable),
+`experiments/report.py` tabulates the seeds, `experiments/cluster.sh` submits to a SLURM
+cluster over ssh from your own machine. See `experiments/README.md`, `AGENTS.md` and the
+first assignment `experiments/TRACK_A.md`.
+
 ## Running tests
 
 The test files are plain scripts (except `test_bars_stripes.py`):
@@ -275,6 +282,7 @@ The test files are plain scripts (except `test_bars_stripes.py`):
 ```bash
 python3 tests/test_smoke_sweep.py    # run after any change to solver, memristor or rules
 python3 tests/test_engine.py         # run after any change to the engine or sim.py
+python3 tests/test_runner.py         # run after any change to experiments/run.py, report.py, cluster.sh
 python3 tests/test_plasticity.py     # 4->3->4 learning run; final MSE must stay 0.050202
 python3 tests/test_dynamics_basic.py
 pytest tests/test_bars_stripes.py -v

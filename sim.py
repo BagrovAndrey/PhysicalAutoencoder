@@ -225,6 +225,24 @@ def train_protocol(args):
                     divergence_threshold=None if args.no_divergence_guard else args.divergence_threshold)
 
 
+def save_json(args, final, w, **extra):
+    """Machine-readable result, one format for train / oracle / handbuilt:
+    args, final = {'train': metrics[, 'test': metrics]}, w = the state, plus extras."""
+    def plain(v):
+        if isinstance(v, np.ndarray):
+            return v.tolist()
+        if isinstance(v, dict):
+            return {k: plain(x) for k, x in v.items()}
+        if isinstance(v, (np.floating, np.integer)):
+            return v.item()
+        return v
+    out = dict(args={k: v for k, v in vars(args).items() if k != 'func'},
+               final=plain(final), w=np.asarray(w).tolist(), **plain(extra))
+    with open(args.json, 'w') as f:
+        json.dump(out, f, indent=1)
+    print(f"  saved {args.json}")
+
+
 def cmd_train(args):
     net = make_net(args)
     X, N = load_patterns(args)
@@ -312,11 +330,7 @@ def cmd_train(args):
         fig.tight_layout(); fig.savefig(args.plot, dpi=110)
         print(f"\n  plot saved to {args.plot}")
     if args.json:
-        dump = {k: {kk: (vv.tolist() if isinstance(vv, np.ndarray) else vv) for kk, vv in v.items()}
-                for k, v in result.items()}
-        json.dump(dict(args={k: v for k, v in vars(args).items() if k != 'func'}, history=history, final=dump, w=w.tolist()),
-                  open(args.json, 'w'), indent=1)
-        print(f"  saved {args.json}")
+        save_json(args, result, w, history=history)
     return 0
 
 
@@ -332,19 +346,22 @@ def cmd_oracle(args):
     print("          (not a physical rule - the ceiling a rule should be judged against)")
     proto = Protocol('equilibrium')
     t0 = time.perf_counter()
-    best = None
+    best, restarts = None, []
     for r in range(args.restarts):
         w0 = init_weights(net, args.seed + r, args.w_min, args.w_max)
         w = oracle(net, X, w0, vsig=args.vsig, iters=args.iters, lr=args.lr)
         outs = evaluate(net, w, X, args.vsig, proto)
         m = metrics(outs, X)
+        restarts.append(m['mse'])
         print(f"  restart {r + 1}/{args.restarts}: MSE={m['mse']:.4f}  wrong px [{dist_line(m)}]", flush=True)
         if best is None or m['mse'] < best[0]['mse']:
-            best = (m, outs)
+            best = (m, outs, w)
     print(f"  ({time.perf_counter() - t0:.1f}s)")
     print_distribution("best restart", best[0], args.n_input)
     if args.show_patterns:
         show_patterns(best[1], X, N)
+    if args.json:
+        save_json(args, dict(train=best[0]), best[2], restart_mse=restarts)
     return 0
 
 
@@ -365,6 +382,8 @@ def cmd_handbuilt(args):
     print_distribution("reconstruction", m, args.n_input)
     if args.show_patterns:
         show_patterns(outs, X, N)
+    if args.json:
+        save_json(args, dict(train=m), w)
     return 0
 
 
@@ -616,6 +635,7 @@ def main():
 
     p = sub.add_parser('oracle', help='best reconstruction any conductances can reach')
     add_common(p)
+    p.add_argument('--json', metavar='FILE', help='save final metrics and weights')
     p.add_argument('--restarts', type=int, default=2)
     p.add_argument('--iters', type=int, default=450)
     p.add_argument('--lr', type=float, default=0.03)
@@ -624,6 +644,7 @@ def main():
 
     p = sub.add_parser('handbuilt', help='hand-wired AND/OR network for Bars & Stripes')
     add_common(p)
+    p.add_argument('--json', metavar='FILE', help='save final metrics and weights')
     p.add_argument('--pullup', type=float, default=0.2, help='weak pull-up of the AND detectors')
     p.add_argument('--show-patterns', action='store_true')
     p.set_defaults(func=cmd_handbuilt, element='rectpair', dataset='bars-stripes', n_input=9)

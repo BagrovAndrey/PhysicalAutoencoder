@@ -1,0 +1,7 @@
+{
+  "question": "Pilot. Where does the hand-built 3x3 AND/OR network stop reconstructing all 14 patterns, as a function of forward drop V_f and g_min? Deterministic: no seeds.",
+  "command": "handbuilt",
+  "base": {"element": "rectpair", "vsig": 1.0, "pullup": 0.2},
+  "grid": {"vf": [0, 0.02, 0.05, 0.1, 0.15, 0.2], "g-min": [0.01, 0.001]},
+  "slurm": {"partition": "tcm", "time": "00:10:00", "cpus": 4, "max_parallel": 1}
+}

@@ -311,12 +311,42 @@ many weights sit at the clip bounds at the end (`--json`, field `w`) for window 
   weaker pull-up leakage no longer holds the AND nodes inside the dead zone). *Local EP on
   2×2* (4-3-4, 60 epochs, equilibrium, 5 seeds): `V_f = 0` 5/5 seeds perfect; `V_f = 0.05`
   0/5, exact 0.43 ± 0.15, MSE 0.16; `V_f = 0.1` 0/5, exact 0.33, MSE 0.18. Representable
-  (the hand-built network works at 0.05) but not learned; whether this is a trainability or a
-  representation limit on 2×2 is open (needs the oracle at the same settings). At
+  (the hand-built 3×3 network works at 0.05) but not learned; the pilot alone could not
+  distinguish trainability from representation on 2×2 (same-architecture check below). At
   `V_f = 0.1` every seed has exactly 2 of 6 patterns right: **measured** from the stored
   per-pattern wrong-pixel vectors (checked 2026-10-02), these are the trivial all-zeros /
   all-ones patterns; none of the four non-trivial patterns is reconstructed exactly.
   This does not identify the cause of the failure.
+- **Same-architecture forward-drop oracle (measured, 2026-10-02).**
+  `experiments/2026-10-02_oracle_vf/`: 2×2 B&S, 4–3–4, 5 seed entries,
+  default 2 restarts and 450 Adam iterations. At `V_f = 0, 0.05, 0.1`, attained mean
+  MSE is `0.04267 ± 0.00000`, `0.06352 ± 0.00663`, `0.08597 ± 0.01796`; mean exact
+  fraction is `1.00`, `0.87 ± 0.07`, `0.87 ± 0.14`. Fully exact solutions exist at
+  both nonzero drops. **Derived:** the pilot's collapse is not solely a binary
+  representation limit: EP exceeds the attained oracle mean MSE by about 0.099 at
+  0.05 and 0.093 at 0.1. The rising oracle MSE is not a proof of a global analog-error
+  floor. Adjacent seed entries share restarts; the two perfect entries at 0.1 share
+  one successful internal initialization.
+- **Fine forward-drop grid (measured, 2026-10-02).**
+  `experiments/2026-10-02_vf_fine/`: same local EP as the pilot, 60 epochs, 5 seeds.
+  At `V_f = 0, 0.01, 0.02, 0.03, 0.05`, perfect-seed counts are `5, 2, 0, 1, 0` out
+  of 5; mean MSE is `0.0540, 0.0814, 0.1220, 0.1361, 0.1624` (spread and full
+  metrics in the study). **Derived:** the first sampled loss of reliable exact
+  learning occurs already at `V_f/V_sig = 0.01`, but exact success is not monotone;
+  these five seeds and finite epochs do not locate a universal critical drop.
+  No same-point oracle was run at the three intermediate drops. Overlapping pilot
+  runs reproduce weights and metrics exactly.
+- **Stronger nudge at fixed forward drop (measured, 2026-10-02).**
+  `experiments/2026-10-02_beta_at_vf/`: local EP at `V_f=0.05`, same 60 epochs and
+  5 seeds. For `beta*g_penalty = 0.1, 0.3, 1, 3`, mean MSE is respectively
+  `0.1624 ± 0.0198`, `0.1758 ± 0.0306`, `0.1853 ± 0.0282`, `0.1771 ± 0.0177`;
+  no setting gives a perfect seed. Exact fractions are `0.43, 0.47, 0.47, 0.40`.
+  **Derived:** this nudge grid does not rescue exact reconstruction or close the
+  gap to the matched oracle. **Hypothesis, not established:** a dead zone hiding
+  weak nudges and a strong nudge biasing the gradient. These runs measure final
+  reconstruction, not per-edge activation or gradient alignment, so worse MSE
+  cannot identify that mechanism. All 60 runs across these three follow-ups were
+  successful and their final evaluations converged; code and defaults unchanged.
 - **On/off ratio scales with fan-in.** Hand-built 4×4 (16-8-16): 73% at `g_min = 0.01`
   whatever the pull-up, 100% at `g_min = 0.001`: summed leakage grows with fan-in.
 

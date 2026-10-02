@@ -89,3 +89,5 @@ Wrong pixels per pattern, pooled over seeds (share of patterns with k wrong):
 ## Caveats
 
 Only five seeds and a finite training/optimization budget. Report MSE, bit accuracy, exact-pattern fraction, normalized margin and wrong-pixel distributions. A large absolute margin may belong to confidently wrong predictions. Check final evaluation convergence; successful process exit alone is not a convergence certificate. These are training-set results including the two trivial patterns, not generalization tests. Mark interpretation as **measured**, **derived** or **hypothesis**; do not infer an unmeasured continuous tolerance threshold from the discrete grid.
+
+Final convergence is checked from saved evaluation flags; intermediate relaxation states and all of their convergence flags are not archived in these records. For training runs the rule aborts on free/nudged divergence, but a successful exit and final convergence do not certify convergence of every intermediate gradient-estimation phase. No claim about unrecorded solver trajectories is made.

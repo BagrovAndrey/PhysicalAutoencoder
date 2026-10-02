@@ -8,6 +8,52 @@ Last updated: 2026-10-02
 
 ---
 
+## 2026-10-02: forward-drop representation and EP trainability separated
+
+Three predeclared grids on rectpair 2×2 Bars & Stripes, 4–3–4, seeds 0–4,
+all run from `0bc1afb475ddd11465767a0565f873c14dffef0b`, sequentially:
+
+- [oracle_vf](experiments/2026-10-02_oracle_vf/README.md): 15 runs, job 11775898.
+- [vf_fine](experiments/2026-10-02_vf_fine/README.md): 25 runs, job 11775928.
+- [beta_at_vf](experiments/2026-10-02_beta_at_vf/README.md): 20 runs, job 11776403.
+
+**Measured:** 60 successful records, zero failed or missing, all final evaluations
+report `eval_converged=1`. No code/default changes or tuning after outcomes.
+Reports include all five metrics, per-seed wrong-pixel vectors, spread, snapshot
+and convergence limitations. Summaries are committed; raw records remain in
+LOCAL_RESULTS. **Derived:** summed process wall time is about 1.318 core-hours,
+not the SLURM allocation billing total.
+
+**Measured:** Oracle mean MSE at vf=0, 0.05, 0.1 is respectively
+0.04267 ± 0.00000, 0.06352 ± 0.00663, 0.08597 ± 0.01796. It finds fully exact
+weights at both nonzero drops. **Derived:** the pilot's poor EP performance is
+not solely a binary representation limit of this architecture; at vf=0.05 and
+0.1, EP mean MSE exceeds the attained oracle reference by about 0.099 and 0.093.
+The rising attained oracle MSE is not a proof of a global analog-error floor.
+Adjacent oracle seed entries share default internal restarts; the two perfect
+entries at vf=0.1 share the same successful initialization.
+
+**Measured:** EP perfect-seed counts at vf=0, 0.01, 0.02, 0.03, 0.05 are
+5/5, 2/5, 0/5, 1/5, 0/5 (60 epochs each). **Derived:** reliable exact learning
+is already lost at the first sampled nonzero drop, but no monotone universal
+critical vf is established. Intermediate points lack a matched oracle study.
+Overlapping pilot runs reproduce weights and metrics exactly.
+
+**Measured:** At vf=0.05, effective nudges 0.1, 0.3, 1, 3 give mean MSE
+0.1624 ± 0.0198, 0.1758 ± 0.0306, 0.1853 ± 0.0282, 0.1771 ± 0.0177,
+with 0/5 perfect seeds at every value. **Derived:** stronger nudge in this grid
+does not rescue the learning outcome. **Hypothesis remains open:** dead-zone
+masking versus gradient-estimator bias. No gradient-alignment or branch-activation
+measurement was requested or added, so final MSE cannot establish the mechanism.
+
+For device selection this distinguishes a circuit's ability to represent patterns
+from the local rule's ability to find useful states under the selected protocol.
+The measurements inform D4 without changing an operating-point default or
+selecting among D1–D8. SPEC §3.6 records these findings; the earlier pilot's
+same-architecture binary-representability question is now answered constructively.
+
+---
+
 ## 2026-10-02: identify the pilot's exact patterns at nonzero forward drop
 
 **Measured (existing records, no new simulation):** At `vf=0.1`, each of the five

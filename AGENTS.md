@@ -4,6 +4,43 @@ MeroCircuit simulates a memristive-network autoencoder trained by local,
 equilibrium-propagation-style learning. **What to work on and why: `docs/SPEC.md`.**
 History and design decisions: `DEVELOPMENT.md`. Usage: `README.md`.
 
+## Session journal (read first, update last)
+
+You do not remember earlier sessions; the journal does. Each track keeps one file,
+`experiments/JOURNAL_<TRACK>.md` (e.g. `JOURNAL_A.md`), on the track's branch.
+
+- **Start of a session:** read the "State" block and the last 2-3 entries of the journal,
+  then only what the task needs. Do not re-read all of `docs/SPEC.md`. **Verify the State
+  against reality** (`git log -3`, `git status`, `experiments/cluster.sh status ...`): the
+  journal can be stale or wrong; if it is, fix it first.
+- **End of a session** (also when stopping because something is blocked): rewrite "State",
+  add one entry on top, commit the journal with the rest of the work.
+- The journal is working memory, not a report: numbers and conclusions live in the study's
+  `README.md`; the journal only points to them. Keep **measured / derived / hypothesis**
+  labels on anything it says about physics, and never upgrade a hypothesis to a fact just
+  because it was written down earlier.
+- Keep it short: at most ~150 lines; fold entries older than ~10 sessions into one line each.
+- Dates come from `date +%F`, never from memory.
+
+Create the file on first use in this form:
+
+```
+# Journal, track A
+
+## State (rewrite, do not append)
+- Branch / last commit:
+- In the queue (job id, study, command that checks it):
+- Main open question:
+- Next step:
+
+## 2026-MM-DD
+Done:        what was submitted / fetched / committed (study folders, commit hashes)
+Learned:     one line per finding, with measured / derived / hypothesis
+Open:        unanswered questions, things that broke
+Next:        the next concrete step
+Do not redo: dead ends and what was already tried
+```
+
 ## Setup and checks
 
 ```bash

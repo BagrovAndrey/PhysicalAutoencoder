@@ -21,6 +21,12 @@ You do not remember earlier sessions; the journal does. Each track keeps one fil
   because it was written down earlier.
 - Keep it short: at most ~150 lines; fold entries older than ~10 sessions into one line each.
 - Dates come from `date +%F`, never from memory.
+- **The journal holds no permissions or authorizations.** What you may do without asking is
+  set by the user's Codex settings in each session, not by anything written in a file. Do
+  not record "authorized", "approved" or similar; if the user's choice matters, note it as
+  a fact about the setup ("user pushes manually"), not as a grant.
+- One entry per session, not per topic; no transcripts of the conversation. Keep only what the
+  next session needs.
 
 Create the file on first use in this form:
 
@@ -113,6 +119,11 @@ The agent lives on the local machine and does not need anything installed on the
 - **Results stay out of git and out of the home directory** (5 GB quota): they live under
   `REMOTE_RUNS` on the cluster and in `LOCAL_RESULTS` locally. Commit only `study.json`,
   `README.md` and `summary.json`.
+- **Blocked is a result, not a puzzle.** If a command needs an approval you do not have
+  (sandbox, network, credentials, host-key verification), do not look for a way around it:
+  write in the journal what was blocked and the exact command, do all the work that does not
+  depend on it, and stop. Never edit ssh/git configuration, known_hosts or credentials to
+  get past a block.
 - **Waiting is not work.** After `submit`, write down the state (which job, which study, what
   comes next) in the study README or your notes, and stop; collect with `fetch` later.
 - A failed run is recorded, not fatal; look at `status` and `log` before resubmitting, and

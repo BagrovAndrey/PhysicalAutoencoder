@@ -184,12 +184,17 @@ class GlobalThetaRule:
 
 
 # ---------------------------------------------------------------- evaluation
-def evaluate(net, w, X, vsig, protocol):
+def evaluate(net, w, X, vsig, protocol, return_info=False):
     """Fresh free-phase relaxation (from V=0) of every pattern; outputs in units
-    of the signal amplitude."""
+    of the signal amplitude. With return_info=True also returns the fraction of
+    patterns whose relaxation converged (under the 'exposure' protocol a fixed
+    budget normally stops short; under 'equilibrium' anything below 1 is a warning)."""
     g = net.conductance(w)
-    return np.array([protocol.relax(net, g, net.boundary(x, vsig))['V_final'][net.outputs]
-                     for x in X]) / vsig
+    res = [protocol.relax(net, g, net.boundary(x, vsig)) for x in X]
+    outs = np.array([r['V_final'][net.outputs] for r in res]) / vsig
+    if return_info:
+        return outs, float(np.mean([bool(r['converged']) and not r['diverged'] for r in res]))
+    return outs
 
 
 def metrics(outs, X):

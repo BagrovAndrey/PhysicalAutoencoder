@@ -225,6 +225,13 @@ def train_protocol(args):
                     divergence_threshold=None if args.no_divergence_guard else args.divergence_threshold)
 
 
+def warn_converged(conv, proto):
+    """Under the equilibrium protocol an unconverged final evaluation means the
+    reported numbers are not at equilibrium; say so (it is also saved in the JSON)."""
+    if proto.kind == 'equilibrium' and conv < 1.0:
+        print(f"  WARNING: only {conv:.0%} of the final relaxations converged to equilibrium")
+
+
 def save_json(args, final, w, **extra):
     """Machine-readable result, one format for train / oracle / handbuilt:
     args, final = {'train': metrics[, 'test': metrics]}, w = the state, plus extras."""
@@ -303,15 +310,18 @@ def cmd_train(args):
     print(f"  {'mean ' if P > 1 else ''}MSE {first:.6f} -> {last:.6f}   {change}")
 
     # Final evaluation: fresh free relaxation of every pattern with the final weights.
-    outs = evaluate(net, w, train_set, args.vsig, proto)
+    outs, conv = evaluate(net, w, train_set, args.vsig, proto, return_info=True)
     m = metrics(outs, train_set)
+    m['eval_converged'] = conv
+    warn_converged(conv, proto)
     print_distribution("final reconstruction (fresh free relaxation)", m, args.n_input)
     if args.show_patterns:
         show_patterns(outs, train_set, N)
     result = dict(train=m)
     if test_set is not None:
-        outs_t = evaluate(net, w, test_set, args.vsig, proto)
+        outs_t, conv_t = evaluate(net, w, test_set, args.vsig, proto, return_info=True)
         mt = metrics(outs_t, test_set)
+        mt['eval_converged'] = conv_t
         print_distribution("held-out patterns", mt, args.n_input)
         if args.show_patterns:
             show_patterns(outs_t, test_set, N)
@@ -350,8 +360,10 @@ def cmd_oracle(args):
     for r in range(args.restarts):
         w0 = init_weights(net, args.seed + r, args.w_min, args.w_max)
         w = oracle(net, X, w0, vsig=args.vsig, iters=args.iters, lr=args.lr)
-        outs = evaluate(net, w, X, args.vsig, proto)
+        outs, conv = evaluate(net, w, X, args.vsig, proto, return_info=True)
         m = metrics(outs, X)
+        m['eval_converged'] = conv
+        warn_converged(conv, proto)
         restarts.append(m['mse'])
         print(f"  restart {r + 1}/{args.restarts}: MSE={m['mse']:.4f}  wrong px [{dist_line(m)}]", flush=True)
         if best is None or m['mse'] < best[0]['mse']:
@@ -376,8 +388,11 @@ def cmd_handbuilt(args):
     print(f"weights : hand-built AND/OR (N={N} row + {N} column detectors), pull-up {args.pullup}")
     w = handbuilt_bars_stripes(net, N, args.pullup)
     t0 = time.perf_counter()
-    outs = evaluate(net, w, X, args.vsig, Protocol('equilibrium'))
+    proto = Protocol('equilibrium')
+    outs, conv = evaluate(net, w, X, args.vsig, proto, return_info=True)
     m = metrics(outs, X)
+    m['eval_converged'] = conv
+    warn_converged(conv, proto)
     print(f"  ({time.perf_counter() - t0:.1f}s)")
     print_distribution("reconstruction", m, args.n_input)
     if args.show_patterns:

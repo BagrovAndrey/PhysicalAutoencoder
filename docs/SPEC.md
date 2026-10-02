@@ -1,6 +1,6 @@
 # MeroCircuit — status, diagnosis and research plan
 
-*Last updated 2026-09-30. Audience: coding agents (Codex) and the team. Read
+*Last updated 2026-10-02. Audience: coding agents (Codex) and the team. Read
 [`AGENTS.md`](../AGENTS.md) first for working rules.*
 
 ## 0. How to use this document
@@ -303,6 +303,18 @@ many weights sit at the clip bounds at the end (`--json`, field `w`) for window 
   (0.033) but the local rule does not learn — saturated edges pass no nudge (the analog
   of vanishing gradients). `tanh(2 V)` learns (MSE 0.040 vs ceiling 0.038). The
   saturation scale must be comparable to the signal.
+- **Forward drop, first pilot of track A (2026-09-30; preliminary, `experiments/2026-10-01_pilot/`).**
+  *Hand-built 3×3* (rectpair, `V_sig = 1`, pull-up 0.2, deterministic): `g_min = 0.01` keeps
+  14/14 up to `V_f = 0.1` (margin 0.003 there) and fails at 0.15; `g_min = 0.001` keeps 14/14
+  up to 0.05 and **fails already at 0.1** (8/14 exact), although its MSE is lower at small
+  `V_f` (0.045 vs 0.062 at 0; its margin is smaller, 0.028 vs 0.053). Why the lower `g_min` is *less* tolerant is not explained (hypothesis: the
+  weaker pull-up leakage no longer holds the AND nodes inside the dead zone). *Local EP on
+  2×2* (4-3-4, 60 epochs, equilibrium, 5 seeds): `V_f = 0` 5/5 seeds perfect; `V_f = 0.05`
+  0/5, exact 0.43 ± 0.15, MSE 0.16; `V_f = 0.1` 0/5, exact 0.33, MSE 0.18. Representable
+  (the hand-built network works at 0.05) but not learned; whether this is a trainability or a
+  representation limit on 2×2 is open (needs the oracle at the same settings). At
+  `V_f = 0.1` every seed has exactly 2 of 6 patterns right: **hypothesis** that these are
+  the trivial all-zeros / all-ones patterns, i.e. nothing structural is learned.
 - **On/off ratio scales with fan-in.** Hand-built 4×4 (16-8-16): 73% at `g_min = 0.01`
   whatever the pull-up, 100% at `g_min = 0.001`: summed leakage grows with fan-in.
 

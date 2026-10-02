@@ -100,6 +100,9 @@ def test_local_and_report():
           rec['status'] == 'ok' and rec['argv'][0] == 'train' and rec['git']
           and 'train' in rec['result']['final'] and rec['result']['w'])
     check("history is stored (thinned)", len(rec['result']['history']) >= 1)
+    check("final evaluation convergence is recorded",
+          rec['result']['final']['train'].get('eval_converged') in (0.0, 1.0)
+          or 0 <= rec['result']['final']['train'].get('eval_converged', -1) <= 1)
 
     r2 = cli('run', d / 'study.json', '--out', out)
     check("a second call has nothing to do", '0 to run' in r2.stdout, r2.stdout.strip().splitlines()[0])
@@ -135,7 +138,10 @@ def test_local_and_report():
     check("seeds are aggregated (n = 2 per row)", all(row['n'] == 2 for row in s['rows']))
     check("metrics present", all(row['mse'][0] is not None for row in s['rows']))
     txt = report_mod.table(s)
-    check("markdown table renders", txt.startswith('| vf | n | mse') and txt.count('\n') == 3)
+    check("markdown table renders", txt.startswith('| vf | n | mse'))
+    check("wrong-pixel distribution is pooled and printed",
+          'Wrong pixels per pattern' in txt and all(abs(sum(r['wrong_dist'].values()) - 1) < 1e-9
+                                                     for r in s['rows']))
     sb = report_mod.summarize(report_mod.load(outb))
     check("failures are counted, not tabulated", len(sb['failed']) == 1 and sb['ok'] == 1)
     check("results from a directory of files load too", len(report_mod.load(out)) >= 1)
@@ -145,6 +151,25 @@ def test_local_and_report():
     check("array size = ceil(4 runs / 2 cpus) = 2 tasks, at most 3 at once", '--array=0-1%3' in o, '')
     check("partition, time and shard argument are set",
           '--partition=tcm' in o and '--time=00:30:00' in o and '--shard "${SLURM_ARRAY_TASK_ID}/2"' in o)
+    shutil.rmtree(d)
+
+
+def test_new_study():
+    print("\n[4b] new_study.sh")
+    d = Path(tempfile.mkdtemp())
+    (d / 'experiments').mkdir()
+    shutil.copy(REPO / 'experiments' / 'new_study.sh', d / 'experiments')
+    subprocess.run(['git', 'init', '-q'], cwd=d)
+    today = subprocess.run(['date', '+%F'], capture_output=True, text=True).stdout.strip()
+    r = subprocess.run(['bash', 'experiments/new_study.sh', 'demo', 'oracle'], cwd=d, capture_output=True, text=True)
+    folder = d / 'experiments' / f'{today}_demo'
+    check("folder is named with today's date from `date +%F`", r.returncode == 0 and folder.is_dir(), r.stderr[-100:])
+    runs = run_mod.expand(run_mod.load_study(folder / 'study.json'))
+    check("the skeleton study parses and expands", len(runs) == 10 and runs[0]['argv'][0] == 'oracle')
+    r2 = subprocess.run(['bash', 'experiments/new_study.sh', 'demo'], cwd=d, capture_output=True, text=True)
+    check("an existing study is not overwritten", r2.returncode != 0)
+    r3 = subprocess.run(['bash', 'experiments/new_study.sh', 'bad name'], cwd=d, capture_output=True, text=True)
+    check("a bad topic is refused", r3.returncode != 0)
     shutil.rmtree(d)
 
 
@@ -225,6 +250,7 @@ if __name__ == '__main__':
     t0 = time.perf_counter()
     test_expansion()
     test_local_and_report()
+    test_new_study()
     test_cluster_flow()
     print(f"\n{PASSED} passed, {FAILED} failed   ({time.perf_counter() - t0:.1f}s)")
     sys.exit(1 if FAILED else 0)

@@ -42,7 +42,8 @@ Questions to answer, in this order (each: one study folder, see below):
 
 For every study, a folder `experiments/<YYYY-MM-DD>_<topic>/` containing
 
-- `study.json` (or several `*.json`) — the grid; committed and pushed **before** submitting;
+- `study.json` (or several `*.json`) — the grid; created with `experiments/new_study.sh TOPIC`
+  (date from `date +%F`), committed and pushed **before** submitting;
 - `README.md` — question, how to run (the `cluster.sh` commands), the table from
   `report.py`, a short reading of it, caveats. Mark each claim **measured** / **derived** /
   **hypothesis**. No PNG/GIF files;

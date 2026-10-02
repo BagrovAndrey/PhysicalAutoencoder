@@ -1,13 +1,13 @@
 # Journal, track A
 
 ## State (rewrite, do not append)
-- Branch / last commit: `track-a-device`; this session diagnostic/report commit follows starting HEAD `0a2fb40` (library revision used for the local run).
+- Branch / last commit: `track-a-device`; final documentation/journal commit at HEAD, parent `453d6f0` (alignment script/report). Local diagnostic used library revision `0a2fb40`.
 - In the queue: none for previous studies; beta_at_vf job 11776403 verified complete (20/20). Check: `experiments/cluster.sh status A experiments/2026-10-02_beta_at_vf/study.json`.
 - Main open question: whether disagreement at forward-drop kinks reflects EP error or limitations of the selected-active-set implicit derivative; numbers in ep_alignment README.
 - Next step: user pushes the diagnostic/report commit, then supplies the next task. No scheduled work; user pushes manually.
 
 ## 2026-10-02 (current session)
-Done:        Created ep_alignment/alignment.py and README; ran 20 trajectories locally (fixed training nudge, three probes on epochs 0/30/60), saved compact summary.json and ignored full results/results.json. Updated DEVELOPMENT and SPEC §3.6. Corrected stale branch state and consolidated prior session notes under current journal rules.
+Done:        Created ep_alignment/alignment.py and README; ran 20 trajectories locally (fixed training nudge, three probes on epochs 0/30/60), saved compact summary.json and ignored full results/results.json in report commit 453d6f0. Updated DEVELOPMENT and SPEC §3.6. Corrected stale branch state and consolidated prior session notes under current journal rules.
 Learned:     measured / derived: cosine versus the library gradient decreases with vf in the declared comparisons; refutation criterion not met. Full table, spread, norms and kink caveats in `2026-10-02_ep_alignment/README.md`.
 Open:        Implicit oracle at nonsmooth/singular points is not an independently validated physical gradient. The alignment trend does not establish the cause of stalled learning; no finite-difference test at kinks was requested.
 Next:        User push and next research task; no additional runs scheduled.

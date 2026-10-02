@@ -347,6 +347,20 @@ many weights sit at the clip bounds at the end (`--json`, field `w`) for window 
   reconstruction, not per-edge activation or gradient alignment, so worse MSE
   cannot identify that mechanism. All 60 runs across these three follow-ups were
   successful and their final evaluations converged; code and defaults unchanged.
+- **EP alignment diagnostic (measured, 2026-10-02).**
+  `experiments/2026-10-02_ep_alignment/`: rectpair 4–3–4, 2×2 B&S, seeds 0–4,
+  initial weights and epochs 30/60 of the unchanged EP trajectory (training nudge
+  0.1); probes 0.1, 0.01, 0.001 on identical snapshots. In all nine (epoch,probe)
+  combinations, sample-mean cosine with `loss_and_grad` decreases across
+  `V_f=0,0.02,0.05,0.1`. At epoch 60 and probe 0.001: `1.0000 ± 0.0000`,
+  `0.9714 ± 0.0477`, `0.4358 ± 0.6348`, `0.1828 ± 0.6217`. **Derived:** the
+  proposed refutation criterion (>0.9 at all drops) is not met; reducing nudge
+  does not universally restore agreement. **Caveat:** nonzero-drop equilibria
+  often sit at rectifier kinks; the library implicit derivative is a selected
+  active-set/least-squares reference, not a proven ground-truth derivative there.
+  Agreement loss does not establish a causal physical-learning mechanism.
+  All 180 comparisons are valid and all checked relaxations converged; full
+  table, norms and limits in the study.
 - **On/off ratio scales with fan-in.** Hand-built 4×4 (16-8-16): 73% at `g_min = 0.01`
   whatever the pull-up, 100% at `g_min = 0.001`: summed leakage grows with fan-in.
 

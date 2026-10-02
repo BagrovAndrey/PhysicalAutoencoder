@@ -8,6 +8,35 @@ Last updated: 2026-10-02
 
 ---
 
+## 2026-10-02: local EP alignment versus the implicit gradient
+
+Local diagnostic: `experiments/2026-10-02_ep_alignment/alignment.py`, library
+revision `0a2fb40`; configuration, hashes, full table and caveats in the study
+README and summary.json. Rectpair 4–3–4, all six 2×2 B&S patterns, seeds 0–4,
+vf={0,0.02,0.05,0.1}, probe nudges={0.1,0.01,0.001}, epochs={0,30,60}.
+Training nudge stays 0.1; probes use identical saved weights without updating.
+The 20 local trajectories reproduce previous endpoints to floating-point
+precision; all 180 comparisons are valid and checked relaxations converged
+(max residual <1e-12).
+
+**Measured / derived:** Sample-mean cosine decreases with vf in all nine fixed
+(epoch,probe) comparisons. At epoch 60, probe=0.001, means ± sample standard
+deviation are 1.0000 ± 0.0000, 0.9714 ± 0.0477, 0.4358 ± 0.6348,
+0.1828 ± 0.6217. The >0.9-at-every-vf refutation criterion fails for both group
+means and per-seed minima; 26/36 group means are ≤0.9. Weak nudge is therefore
+not a universal fix for agreement with this reference on the tested snapshots.
+
+**Caveat / hypothesis:** Rectifying forward-drop states often reach kinks.
+The oracle's implicit derivative uses the solver's selected active set and
+least-squares Jacobian; at a nonsmooth/singular point it is not an independently
+validated true gradient of the selected relaxation state. Low or negative
+cosine documents disagreement, not a proof that EP opposes physical descent.
+Finite-difference validation at these kinks and pattern-level diagnostics remain
+open; no additional experiments or tuning were added. SPEC §3.6 records this
+finding without changing physics defaults or choosing D1–D8.
+
+---
+
 ## 2026-10-02: forward-drop representation and EP trainability separated
 
 Three predeclared grids on rectpair 2×2 Bars & Stripes, 4–3–4, seeds 0–4,

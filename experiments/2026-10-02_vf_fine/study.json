@@ -1,0 +1,35 @@
+{
+  "question": "At which tested forward drop does local EP lose exact reconstruction after 60 epochs?",
+  "command": "train",
+  "base": {
+    "element": "rectpair",
+    "dataset": "bars-stripes",
+    "n-input": 4,
+    "n-hidden": 3,
+    "rule": "ep",
+    "epochs": 60,
+    "protocol": "equilibrium"
+  },
+  "grid": {
+    "vf": [
+      0,
+      0.01,
+      0.02,
+      0.03,
+      0.05
+    ]
+  },
+  "seeds": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "slurm": {
+    "partition": "tcm",
+    "time": "01:00:00",
+    "cpus": 8,
+    "max_parallel": 2
+  }
+}

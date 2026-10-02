@@ -1,0 +1,30 @@
+{
+  "question": "Does the same-architecture oracle degrade with the forward-drop training pilot, or does optimization retain better reconstruction?",
+  "command": "oracle",
+  "base": {
+    "element": "rectpair",
+    "dataset": "bars-stripes",
+    "n-input": 4,
+    "n-hidden": 3
+  },
+  "grid": {
+    "vf": [
+      0,
+      0.05,
+      0.1
+    ]
+  },
+  "seeds": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "slurm": {
+    "partition": "tcm",
+    "time": "01:00:00",
+    "cpus": 8,
+    "max_parallel": 2
+  }
+}

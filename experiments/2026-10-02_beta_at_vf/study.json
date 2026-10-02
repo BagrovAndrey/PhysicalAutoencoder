@@ -1,0 +1,36 @@
+{
+  "question": "At vf=0.05, does stronger nudging recover learning or impair it?",
+  "command": "train",
+  "base": {
+    "element": "rectpair",
+    "dataset": "bars-stripes",
+    "n-input": 4,
+    "n-hidden": 3,
+    "rule": "ep",
+    "epochs": 60,
+    "protocol": "equilibrium",
+    "vf": 0.05,
+    "g-penalty": 10
+  },
+  "grid": {
+    "beta": [
+      0.01,
+      0.03,
+      0.1,
+      0.3
+    ]
+  },
+  "seeds": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "slurm": {
+    "partition": "tcm",
+    "time": "01:00:00",
+    "cpus": 8,
+    "max_parallel": 2
+  }
+}

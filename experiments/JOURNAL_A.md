@@ -1,10 +1,17 @@
 # Journal, track A
 
 ## State (rewrite, do not append)
-- Branch / last commit: `track-a-device`; studies published at `0bc1afb`; oracle report `90549a7` (local).
-- In the queue: none after collecting vf_fine (11775928, 25/25 successful). Oracle already fetched. Check: `experiments/cluster.sh status A experiments/2026-10-02_vf_fine/study.json`.
+- Branch / last commit: `track-a-device`; studies published at `0bc1afb`; local reports `90549a7` (oracle), `0d4e986` (vf_fine).
+- In the queue: none; beta_at_vf job 11776403 finished 20/20 and fetched; oracle 15/15 and vf_fine 25/25 also collected. Check: `experiments/cluster.sh status A experiments/2026-10-02_beta_at_vf/study.json`.
 - Main open question: which devices suit the autoencoder; next quantify EP forward-drop tolerance and nudge dependence with the fixed grids.
-- Next step: submit beta_at_vf from published 0bc1afb, then fetch/report/commit and summarize all three. User performs pushes, now including the journal with other changes.
+- Next step: finish the separate DEVELOPMENT/SPEC findings commit and final verification; user then pushes all reports and journal together. User authorizes workspace work and cluster submissions without further confirmation. User performs pushes, now including the journal with other changes.
+
+## 2026-10-02 (beta_at_vf collected)
+Done:        Submitted job 11776403 after confirming interrupted submission had not happened. Fetched 20/20 successful runs; all final evaluations converged. Wrote beta_at_vf README and summary; validated all 60 study records and exact baseline reproduction.
+Learned:     measured / derived: larger nudges do not rescue exact reconstruction in the specified grid; numerical comparison and hypothesis limits in `2026-10-02_beta_at_vf/README.md`.
+Open:        Gradient-alignment mechanism was not directly measured; do not claim it established by MSE. No additional runs or tuning.
+Next:        Finish shared documentation and communicate complete results; user handles final push.
+Do not redo: All three studies fetched and reported; raw data under LOCAL_RESULTS, summaries in study folders.
 
 ## 2026-10-02 (vf_fine collected)
 Done:        Submitted job 11775928; fetched 25/25 successful runs, all final evaluations converged. Wrote vf_fine README and summary; verified 10 overlapping pilot runs match weights/MSE/wrong vectors exactly.

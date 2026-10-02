@@ -89,7 +89,7 @@ Wrong pixels per pattern, pooled over seeds (share of patterns with k wrong):
 
 **measured:** The ten runs at vf=0 and 0.05 reproduce the earlier pilot exactly: maximal absolute difference in final weights and MSE is zero, and all wrong-pixel vectors match. This checks comparability across the pilot and current snapshots without using those outcomes to change the grid.
 
-**measured / derived:** Same-architecture oracle references from `../2026-10-02_oracle_vf/`: at vf=0, MSE 0.04267 and mean exact=1.0 versus EP MSE 0.05402, exact=1.0; at vf=0.05, oracle MSE 0.06352, exact=0.8667 versus EP MSE 0.16244, exact=0.4333. An oracle entry is fully exact at vf=0.05, establishing binary representability there and a large EP trainability gap. No oracle was requested at vf=0.01, 0.02 or 0.03, so their errors cannot be partitioned into representation and optimization effects from this study alone.
+**measured / derived:** Same-architecture oracle references from `../2026-10-02_oracle_vf/`: at vf=0, MSE 0.04267 and mean exact=1.0 versus EP MSE 0.05404, exact=1.0; at vf=0.05, oracle MSE 0.06352, exact=0.8667 versus EP MSE 0.16236, exact=0.4333. An oracle entry is fully exact at vf=0.05, establishing binary representability there and a large EP trainability gap. No oracle was requested at vf=0.01, 0.02 or 0.03, so their errors cannot be partitioned into representation and optimization effects from this study alone.
 
 **hypothesis:** Dead-zone effects on local training remain a candidate mechanism. The beta_at_vf study tests whether increasing the nudge rescues final reconstruction at fixed vf=0.05; these data alone do not measure gradient alignment or device noise tolerance.
 

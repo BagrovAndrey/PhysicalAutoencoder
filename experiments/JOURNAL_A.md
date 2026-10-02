@@ -1,10 +1,17 @@
 # Journal, track A
 
 ## State (rewrite, do not append)
-- Branch / last commit: `track-a-device`; studies published at `0bc1afb`; oracle report commit follows it.
-- In the queue: none; oracle_vf job 11775898 completed 15/15 with no failures, fetched. Check: `experiments/cluster.sh status A experiments/2026-10-02_oracle_vf/study.json`.
+- Branch / last commit: `track-a-device`; studies published at `0bc1afb`; oracle report `90549a7` (local).
+- In the queue: none after collecting vf_fine (11775928, 25/25 successful). Oracle already fetched. Check: `experiments/cluster.sh status A experiments/2026-10-02_vf_fine/study.json`.
 - Main open question: which devices suit the autoencoder; next quantify EP forward-drop tolerance and nudge dependence with the fixed grids.
-- Next step: submit vf_fine from published 0bc1afb, then fetch/report/commit; beta_at_vf last. User performs pushes, now including the journal with other changes.
+- Next step: submit beta_at_vf from published 0bc1afb, then fetch/report/commit and summarize all three. User performs pushes, now including the journal with other changes.
+
+## 2026-10-02 (vf_fine collected)
+Done:        Submitted job 11775928; fetched 25/25 successful runs, all final evaluations converged. Wrote vf_fine README and summary; verified 10 overlapping pilot runs match weights/MSE/wrong vectors exactly.
+Learned:     measured / derived: first sampled loss of reliable exact learning is at vf=0.01; seed success is not monotone. Numbers and oracle comparison in `2026-10-02_vf_fine/README.md`.
+Open:        No hard critical vf inferred; intermediate vf points have no same-point oracle study. Mechanism unproven.
+Next:        beta_at_vf fixed nudge grid; no tuning.
+Do not redo: Both oracle_vf and vf_fine are complete, with no failed or missing records.
 
 ## 2026-10-02 (oracle_vf collected)
 Done:        Submitted job 11775898, fetched all 15 records from 0bc1afb; wrote oracle_vf README and summary.json, including pilot comparison and convergence checks.

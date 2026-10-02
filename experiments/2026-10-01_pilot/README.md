@@ -109,3 +109,19 @@ and all-ones; these are not held-out-test results.
   cannot distinguish a representational limitation from a learning limitation.
 - The existing folder name is retained as requested; the actual execution date
   from `date +%F` is 2026-09-30. No new study folder was created.
+
+## Exact-pattern identity at vf=0.1 (checked 2026-10-02)
+
+**measured (stored pilot records):** For every seed, the only two exact patterns are the trivial all-zeros (`0000`) and all-ones (`1111`). The four non-trivial patterns each contain errors. Read `result.final.train.wrong` from `LOCAL_RESULTS/A/2026-10-01_pilot/results.jsonl` (snapshot `dd7d74377ae29e2510124746f7c97cd414fb64fb`); no training or relaxation was rerun.
+
+The recorded evaluation uses the lexicographic dataset order from `BarsAndStripes(2).get_all_flattened()`: `0000`, `0011`, `0101`, `1010`, `1100`, `1111`. The vector below gives wrong-pixel counts in that order; zero identifies an exact pattern.
+
+| seed | wrong-pixel vector | exact patterns |
+|---|---|---|
+| 0 | 0 2 2 2 2 0 | `0000`, `1111` |
+| 1 | 0 1 2 1 2 0 | `0000`, `1111` |
+| 2 | 0 2 2 1 2 0 | `0000`, `1111` |
+| 3 | 0 2 2 2 2 0 | `0000`, `1111` |
+| 4 | 0 2 2 2 2 0 | `0000`, `1111` |
+
+**derived:** At vf=0.1 the pilot's 2/6 exact fraction contains no exact reconstruction of a non-trivial bar or stripe (0/4 for every seed). This verifies the pattern-identity hypothesis in SPEC §3.6; it does not identify the cause or prove a representation limit.

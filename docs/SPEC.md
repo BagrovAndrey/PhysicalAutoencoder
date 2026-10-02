@@ -313,8 +313,10 @@ many weights sit at the clip bounds at the end (`--json`, field `w`) for window 
   0/5, exact 0.43 ± 0.15, MSE 0.16; `V_f = 0.1` 0/5, exact 0.33, MSE 0.18. Representable
   (the hand-built network works at 0.05) but not learned; whether this is a trainability or a
   representation limit on 2×2 is open (needs the oracle at the same settings). At
-  `V_f = 0.1` every seed has exactly 2 of 6 patterns right: **hypothesis** that these are
-  the trivial all-zeros / all-ones patterns, i.e. nothing structural is learned.
+  `V_f = 0.1` every seed has exactly 2 of 6 patterns right: **measured** from the stored
+  per-pattern wrong-pixel vectors (checked 2026-10-02), these are the trivial all-zeros /
+  all-ones patterns; none of the four non-trivial patterns is reconstructed exactly.
+  This does not identify the cause of the failure.
 - **On/off ratio scales with fan-in.** Hand-built 4×4 (16-8-16): 73% at `g_min = 0.01`
   whatever the pull-up, 100% at `g_min = 0.001`: summed leakage grows with fan-in.
 

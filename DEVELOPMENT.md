@@ -8,6 +8,21 @@ Last updated: 2026-10-02
 
 ---
 
+## 2026-10-02: identify the pilot's exact patterns at nonzero forward drop
+
+**Measured (existing records, no new simulation):** At `vf=0.1`, each of the five
+pilot seeds reconstructs exactly only `0000` and `1111`; all four non-trivial 2×2
+Bars & Stripes patterns contain errors. Checked `result.final.train.wrong` in the
+pilot's fetched `results.jsonl`, snapshot `dd7d74377ae29e2510124746f7c97cd414fb64fb`,
+against the lexicographic dataset order (unchanged since that snapshot).
+Per-seed vectors and caveats: `experiments/2026-10-01_pilot/README.md`.
+SPEC §3.6 now records this as measured; representation versus trainability remains
+open pending the same-architecture oracle comparison. Track A's broader aim is to
+compare which devices suit this autoencoder, including representation, local
+trainability, operating scales and tolerance to non-idealities.
+
+---
+
 ## 2026-10-02: first track-A pilot, small technical fixes
 
 The cluster chain works end to end (a Codex agent on a local machine submitted, collected

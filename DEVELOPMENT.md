@@ -4,7 +4,23 @@ Working document for restoring context between sessions. README.md describes
 *what* the code does; this file describes *why* it looks the way it does and
 what is currently broken.
 
-Last updated: 2026-09-30
+Last updated: 2026-10-02
+
+---
+
+## 2026-10-02: first track-A pilot, small technical fixes
+
+The cluster chain works end to end (a Codex agent on a local machine submitted, collected
+and reported the 15-run EP pilot; results in `experiments/2026-10-01_pilot/`, summary in
+SPEC 3.6). Fixes found on the way: final evaluations now record whether the relaxation
+converged (`eval_converged` in the JSON, a warning under `--protocol equilibrium`);
+`report.py` pools the wrong-pixel distribution over seeds, so it can be reproduced from
+`summary.json`; `cluster.sh check --compute` gives up after 60 s instead of waiting in the
+queue; `experiments/new_study.sh TOPIC` creates a study folder named with `date +%F` (the
+date in the pilot folder name is a hand-typed placeholder: do not rename it, results on the
+cluster are stored under that name). Device imperfections (spread, finite levels, write
+noise, asymmetric updates) are deliberately NOT in this change: a separate patch, one effect
+at a time, as proof of concept first.
 
 ---
 
@@ -19,7 +35,7 @@ each result records its commit. One track = one branch = one worktree; results l
 shared storage, not in git or the 5 GB home. `sim.py oracle` and `handbuilt` gained
 `--json`. First assignment: `experiments/TRACK_A.md` (realistic device parameters);
 pilot studies in `experiments/2026-10-01_pilot/`. Rules for agents: `AGENTS.md`,
-"Working on the cluster". Tests: `tests/test_runner.py` (33 checks, includes a fake-cluster
+"Working on the cluster". Tests: `tests/test_runner.py` (39 checks, includes a fake-cluster
 run of `cluster.sh`).
 
 ---

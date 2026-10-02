@@ -11,7 +11,7 @@ pip install -r requirements.txt && pip install -e .
 python3 tests/test_smoke_sweep.py   # must end "66 passed, 0 failed" (~3 min)
 python3 tests/test_plasticity.py    # must print "Final MSE: 0.050202"
 python3 tests/test_engine.py        # must end "58 passed, 0 failed" (~30 s)
-python3 tests/test_runner.py        # must end "33 passed, 0 failed" (~10 s)
+python3 tests/test_runner.py        # must end "39 passed, 0 failed" (~10 s)
 python3 sim.py train                # must end at MSE 0.043978
 python3 sim.py train --rule global-theta --cycles 25   # must end at MSE 0.032565
 ```
@@ -63,6 +63,9 @@ The agent lives on the local machine and does not need anything installed on the
 - **Only `cluster.sh`.** Do not run ad-hoc `ssh` commands. It does: `check`, `submit`,
   `status`, `log`, `fetch`, `cancel`. Nothing heavy runs on the login node; the agent only
   submits, waits and reads.
+- **Create study folders with `experiments/new_study.sh TOPIC`**: the date comes from
+  `date +%F` on this machine; never type a date by hand and never rename a folder after
+  submitting (results are stored under its name).
 - **A study is a committed, pushed JSON file** (`experiments/<date>_<topic>/study.json`,
   format in `experiments/run.py`). `submit` runs a snapshot of that commit, so queued jobs
   never see later edits and every result carries its commit hash. Never submit from a dirty

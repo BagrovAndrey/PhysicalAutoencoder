@@ -87,7 +87,9 @@ if [ -n "$part" ] && command -v sinfo >/dev/null; then
 fi
 if [ "$compute" = 1 ]; then
   echo "-- on a compute node:"
-  srun ${part:+-p "$part"} -t 2 -c 1 bash -c "hostname; $py -c 'import numpy, scipy; print(\"numpy/scipy ok\")'; ls -ld '$runs'"
+  # --immediate: give up after 60 s if no node is free instead of waiting in the queue
+  srun --immediate=60 ${part:+-p "$part"} -t 2 -c 1 bash -c "hostname; $py -c 'import numpy, scipy; print(\"numpy/scipy ok\")'; ls -ld '$runs'" \
+    || echo "!! no compute node within 60 s (partition busy?) - this says nothing about the setup"
 fi
 EOF
 }

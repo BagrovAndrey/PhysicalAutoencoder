@@ -49,7 +49,19 @@ def metric_values(final):
         return {}
     wrong = final.get('wrong') or []
     return dict(mse=final['mse'], bits=final['bits'], exact=final['exact'],
-                margin=final['margin'], wrong=(sum(wrong) / len(wrong)) if wrong else float('nan'))
+                margin=final['margin'], wrong=(sum(wrong) / len(wrong)) if wrong else float('nan'),
+                conv=final.get('eval_converged'))
+
+
+def wrong_distribution(finals):
+    """Fraction of patterns (pooled over seeds) with exactly k wrong pixels."""
+    counts = {}
+    total = 0
+    for f in finals:
+        for k in (f or {}).get('wrong') or []:
+            counts[int(k)] = counts.get(int(k), 0) + 1
+            total += 1
+    return {k: counts[k] / total for k in sorted(counts)} if total else {}
 
 
 def mean_std(xs):
@@ -86,6 +98,9 @@ def summarize(recs, by=None):
         for name in ('mse', 'bits', 'exact', 'margin', 'wrong'):
             row[name] = mean_std([t.get(name) for t in train])
         row['perfect'] = sum(1 for t in train if t.get('exact') == 1.0)
+        row['wrong_dist'] = wrong_distribution([r['result']['final'].get('train') for r in rs])
+        convs = [t.get('conv') for t in train if t.get('conv') is not None]
+        row['eval_converged'] = min(convs) if convs else None
         if any('test' in r['result']['final'] for r in rs):
             test = [metric_values(r['result']['final'].get('test')) for r in rs]
             row['test_exact'] = mean_std([t.get('exact') for t in test])
@@ -112,7 +127,18 @@ def table(summary):
             cells += [fmt(*r.get('test_exact', (None, None)), 2),
                       fmt(*r.get('test_wrong', (None, None)), 2)]
         lines.append('| ' + ' | '.join(cells) + ' |')
-    return '\n'.join(lines)
+    out = '\n'.join(lines)
+    dists = [(r['params'], r.get('wrong_dist')) for r in rows if r.get('wrong_dist')]
+    if dists:
+        out += "\n\nWrong pixels per pattern, pooled over seeds (share of patterns with k wrong):\n"
+        for params, d in dists:
+            out += "  " + ' '.join(f"{k}={v}" for k, v in params.items()) + ":  " \
+                   + "  ".join(f"{k}: {v:.0%}" for k, v in d.items()) + "\n"
+    low = [r['params'] for r in rows if r.get('eval_converged') is not None and r['eval_converged'] < 1.0]
+    if low:
+        out += "\nNOTE: final evaluation did not converge in every pattern for: " \
+               + "; ".join(json.dumps(p) for p in low) + "\n"
+    return out.rstrip('\n')
 
 
 def main():
